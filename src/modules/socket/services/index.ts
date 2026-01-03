@@ -6,4 +6,4 @@
 export { SessionService, sessionService } from './session.service';
 export { WebSocketService, websocketService } from './websocket.service';
 export { WebSocketUtilsService, websocketUtilsService } from './websocket-utils.service';
-export { AudioBufferService, audioBufferService } from './audio-buffer.service';
+// AudioBufferService is internal-only (echo testing), not exposed in public API

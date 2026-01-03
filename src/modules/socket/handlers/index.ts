@@ -13,7 +13,8 @@ export {
   handleSessionError,
   handleAudioError,
   handleSTTError,
-  handleLLMError,
-  handleTTSError,
+  // Layer 2: Uncomment when LLM/TTS services are implemented
+  // handleLLMError,
+  // handleTTSError,
   handleInternalError,
 } from './error.handler';

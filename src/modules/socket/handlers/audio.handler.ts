@@ -8,7 +8,6 @@ import {
   VOICECHAT_EVENTS,
   AudioStartPayload,
   AudioChunkPayload,
-  AudioEndPayload,
   isAudioStartPayload,
   isAudioChunkPayload,
   isAudioEndPayload,
@@ -24,6 +23,25 @@ import { handleInvalidPayload, handleSessionError, sendError } from './error.han
 import { handlerUtils } from './handler-utils';
 import { MessagePackHelper } from '../utils/MessagePackHelper';
 import { pack } from 'msgpackr';
+import { sttController } from '@/modules/stt';
+import { OUTPUT_SAMPLE_RATE } from '@/modules/audio/constants/audio.constants';
+import { audioResamplerService } from '@/modules/audio/services';
+
+// Environment flag to toggle between STT and echo mode
+const USE_STT = !!process.env.DEEPGRAM_API_KEY;
+
+// Log audio mode on server startup
+if (USE_STT) {
+  logger.info('🤖 STT MODE: Deepgram integration ENABLED', {
+    mode: 'stt',
+    provider: 'deepgram',
+  });
+} else {
+  logger.warn('🔊 ECHO MODE: Audio echo testing (Deepgram API key not set)', {
+    mode: 'echo',
+    notice: 'Set DEEPGRAM_API_KEY to enable STT',
+  });
+}
 
 /**
  * Handle voicechat.audio.start event
@@ -67,11 +85,6 @@ export async function handleAudioStart(
     // This is needed to send TTS audio chunks back in Layer 2
     websocketService.registerWebSocket(session.sessionId, ws);
 
-    // Initialize audio buffer for echo/loopback testing
-    // TODO: Remove when real STT/LLM/TTS pipeline is implemented
-    const startEventId = data.eventId || generateId();
-    audioBufferService.initializeBuffer(session.sessionId, samplingRate, startEventId);
-
     // Update session with audio config
     const updatedSession = sessionService.updateSession(connectionId, {
       state: SessionState.ACTIVE,
@@ -87,6 +100,45 @@ export async function handleAudioStart(
       handleSessionError(ws, 'Failed to update session', VOICECHAT_EVENTS.AUDIO_START, data);
       return;
     }
+
+    // Verify STT session exists (should have been created on WebSocket connect)
+    if (USE_STT) {
+      // If not, create it now as fallback
+      if (!sttController.hasSession(session.sessionId)) {
+        logger.warn('STT session not found on audio.start, creating fallback', {
+          sessionId: session.sessionId
+        });
+        try {
+          await sttController.createSession(session.sessionId, {
+            sessionId: session.sessionId,
+            connectionId,
+            samplingRate,
+            language: payload.language || 'en-US',
+          });
+        } catch (error) {
+          logger.error('Failed to create fallback STT session', {
+            sessionId: session.sessionId,
+            error
+          });
+          sendError(
+            ws,
+            ErrorCode.INTERNAL_ERROR,
+            'Failed to initialize transcription',
+            VOICECHAT_EVENTS.AUDIO_START,
+            session.sessionId,
+            data.eventId
+          );
+          return;
+        }
+      } else {
+        logger.info('STT session already ready', { sessionId: session.sessionId });
+      }
+    }
+
+    // ALWAYS initialize buffer (for echo testing, later for TTS)
+    const startEventId = data.eventId || generateId();
+    audioBufferService.initializeBuffer(session.sessionId, samplingRate, startEventId);
+    logger.info('Audio buffer initialized', { sessionId: session.sessionId });
 
     logger.info('Audio session started', {
       connectionId,
@@ -161,8 +213,42 @@ export async function handleAudioChunk(
       isMuted,
     });
 
-    // Buffer audio chunk for echo/loopback testing
-    // TODO: Replace with STT service forwarding when pipeline is implemented
+    // Forward to STT if enabled
+    if (USE_STT && !isMuted) {
+      try {
+        // Get input sample rate from session metadata
+        const inputSampleRate = session.metadata?.samplingRate || 16000;
+
+        // Resample if needed (backend handles all resampling)
+        let processedChunk = Buffer.from(audioChunk);
+
+        if (inputSampleRate !== OUTPUT_SAMPLE_RATE) {
+          logger.debug('Resampling audio', {
+            sessionId: session.sessionId,
+            from: inputSampleRate,
+            to: OUTPUT_SAMPLE_RATE,
+          });
+
+          const resampledBuffer = await audioResamplerService.resample(
+            session.sessionId,
+            Buffer.from(audioChunk),
+            inputSampleRate
+          );
+          processedChunk = Buffer.from(resampledBuffer);
+        }
+
+        // Forward resampled audio to STT (16kHz)
+        await sttController.forwardChunk(session.sessionId, new Uint8Array(processedChunk));
+      } catch (error) {
+        logger.error('Failed to process audio for STT', {
+          sessionId: session.sessionId,
+          error,
+        });
+        // Continue despite error - don't break the audio pipeline
+      }
+    }
+
+    // ALWAYS buffer audio (for echo OR future TTS)
     if (!isMuted) {
       audioBufferService.addChunk(session.sessionId, audioChunk);
     }
@@ -180,12 +266,15 @@ export async function handleAudioChunk(
 
 /**
  * Handle voicechat.audio.end event
+ * BUG FIX: Moved buffer cleanup to outer finally block
  */
 export async function handleAudioEnd(
   ws: WebSocket,
   data: UnpackedMessage,
   connectionId: string
 ): Promise<void> {
+  let sessionId: string | undefined;
+
   try {
     const session = handlerUtils.getSessionOrError(
       ws,
@@ -195,6 +284,9 @@ export async function handleAudioEnd(
       VOICECHAT_EVENTS.AUDIO_END
     );
     if (!session) return;
+
+    // Capture sessionId early for finally block
+    sessionId = session.sessionId;
 
     // Validate payload
     if (!isAudioEndPayload(data?.payload)) {
@@ -215,26 +307,43 @@ export async function handleAudioEnd(
       duration: Date.now() - session.createdAt,
     });
 
-    // Send acknowledgment (stub - in Layer 2 we'll cleanup STT/TTS connections)
+    // Finalize transcript if STT enabled (connection stays open)
+    let finalTranscript = '';
+    if (USE_STT) {
+      try {
+        finalTranscript = await sttController.finalizeTranscript(session.sessionId);
+        logger.info('🎤 STT FINAL TRANSCRIPT (COMPLETE RECORDING)', {
+          sessionId: session.sessionId,
+          transcriptLength: finalTranscript.length,
+          fullTranscript: finalTranscript,
+          note: 'This is the COMPLETE accumulated transcript from the entire recording session',
+        });
+        // TODO: Store transcript for LLM (Layer 2)
+      } catch (error) {
+        logger.error('Failed to finalize transcript', { sessionId: session.sessionId, error });
+        // Continue to cleanup
+      }
+    }
+
+    // ALWAYS echo audio back (for testing playback pipeline)
+    // TODO: In Layer 2, replace with TTS audio
+    try {
+      logger.info('Starting audio echo (testing playback)', { sessionId: session.sessionId });
+      await streamEchoedAudio(session.sessionId, session.metadata?.samplingRate || 16000);
+    } catch (error) {
+      logger.error('Failed to echo audio', { sessionId: session.sessionId, error });
+    }
+
+    // Send acknowledgment
     // Use sessionId from request message, fallback to session.sessionId if not provided
-    const sessionId = data.sessionId || session.sessionId;
+    const ackSessionId = data.sessionId || session.sessionId;
     // ACK must use the same eventId as the request
     if (!data.eventId) {
       logger.warn('Request missing eventId, cannot send proper ACK', { connectionId });
-      sendError(ws, ErrorCode.INVALID_PAYLOAD, 'Request missing eventId', VOICECHAT_EVENTS.AUDIO_END, sessionId);
+      sendError(ws, ErrorCode.INVALID_PAYLOAD, 'Request missing eventId', VOICECHAT_EVENTS.AUDIO_END, ackSessionId);
       return;
     }
-    handlerUtils.sendAck(ws, VOICECHAT_EVENTS.AUDIO_END, data.eventId, sessionId, 'audio.end.ack');
-
-    // Echo/loopback testing: Stream buffered audio back to client after delay
-    // TODO: Remove when real STT/LLM/TTS pipeline is implemented
-    await streamEchoedAudio(session.sessionId, session.metadata?.samplingRate || 16000);
-
-    // CRITICAL: Remove active WebSocket for this session (following thine's cleanup pattern)
-    websocketService.removeWebSocket(session.sessionId);
-    
-    // Clear audio buffer
-    audioBufferService.clearBuffer(session.sessionId);
+    handlerUtils.sendAck(ws, VOICECHAT_EVENTS.AUDIO_END, data.eventId, ackSessionId, 'audio.end.ack');
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : 'Unknown error';
     logger.error('Error in handleAudioEnd', {
@@ -242,8 +351,25 @@ export async function handleAudioEnd(
       error: errorMsg,
       stack: error instanceof Error ? error.stack : undefined,
     });
-    const sessionId = data?.sessionId;
-    sendError(ws, ErrorCode.INTERNAL_ERROR, 'Failed to end audio session', VOICECHAT_EVENTS.AUDIO_END, sessionId, data?.eventId);
+    const errorSessionId = data?.sessionId;
+    sendError(ws, ErrorCode.INTERNAL_ERROR, 'Failed to end audio session', VOICECHAT_EVENTS.AUDIO_END, errorSessionId, data?.eventId);
+  } finally {
+    // BUG FIX: Always cleanup buffer, even on error or early return
+    if (sessionId) {
+      try {
+        audioBufferService.clearBuffer(sessionId);
+        logger.debug('Audio buffer cleared', { sessionId });
+      } catch (_cleanupError) {
+        logger.error('Error clearing buffer', { sessionId, error: _cleanupError });
+      }
+
+      try {
+        // CRITICAL: Remove active WebSocket for this session (following thine's cleanup pattern)
+        websocketService.removeWebSocket(sessionId);
+      } catch (_removeError) {
+        logger.error('Error removing WebSocket', { sessionId, error: _removeError });
+      }
+    }
   }
 }
 
@@ -266,20 +392,23 @@ async function streamEchoedAudio(sessionId: string, samplingRate: number): Promi
   // Wait 1 second before starting echo
   await new Promise((resolve) => setTimeout(resolve, 1000));
 
-  // Generate utterance ID for this response
   const utteranceId = generateId();
   const startEventId = buffer.startEventId;
+  const startTime = Date.now();
+  const chunkDelay = 50; // 50ms between chunks
 
-  logger.info('Starting audio echo', {
+  // Enhanced echo start logging
+  logger.info('🔊 Starting audio echo', {
     sessionId,
     chunkCount: buffer.chunks.length,
     utteranceId,
+    estimatedDuration: `${(buffer.chunks.length * chunkDelay) / 1000}s`,
   });
 
   // Send response.start event
   const startMessage = {
     eventType: VOICECHAT_EVENTS.RESPONSE_START,
-    eventId: startEventId, // Use same eventId as audio.start
+    eventId: startEventId,
     sessionId,
     payload: {
       utteranceId,
@@ -289,28 +418,32 @@ async function streamEchoedAudio(sessionId: string, samplingRate: number): Promi
   const startPacked = pack(startMessage);
   websocketService.sendToSession(sessionId, startPacked, 'response.start');
 
-  // Stream chunks back with small delay between chunks (simulate real-time streaming)
-  const chunkDelay = 50; // 50ms between chunks (simulates TTS streaming)
-  
+  // Stream chunks back with small delay between chunks
   for (let i = 0; i < buffer.chunks.length; i++) {
     const chunk = buffer.chunks[i];
-    
-    // Use same utteranceId for all chunks in this response
-    // The utteranceId identifies the entire response, not individual chunks
-    // All chunks must use the same utteranceId to prevent frontend from stopping playback
+
+    // Log progress periodically (every 10 chunks or at start/end)
+    if (i === 0 || i === buffer.chunks.length - 1 || (i + 1) % 10 === 0) {
+      logger.debug('Echo progress', {
+        sessionId,
+        chunk: `${i + 1}/${buffer.chunks.length}`,
+        progress: `${Math.round(((i + 1) / buffer.chunks.length) * 100)}%`,
+      });
+    }
+
     const chunkUtteranceId = utteranceId;
-    
+
     // Pack and send chunk
     const packedChunk = MessagePackHelper.packChunk(
       chunk.audio,
       samplingRate,
       chunkUtteranceId,
-      startEventId, // Same eventId for all chunks
+      startEventId,
       sessionId
     );
-    
+
     websocketService.sendToSession(sessionId, packedChunk, 'response.chunk');
-    
+
     // Small delay between chunks (except for last one)
     if (i < buffer.chunks.length - 1) {
       await new Promise((resolve) => setTimeout(resolve, chunkDelay));
@@ -320,16 +453,18 @@ async function streamEchoedAudio(sessionId: string, samplingRate: number): Promi
   // Send response.complete event
   const completeMessage = {
     eventType: VOICECHAT_EVENTS.RESPONSE_COMPLETE,
-    eventId: startEventId, // Use same eventId as audio.start
+    eventId: startEventId,
     sessionId,
     payload: { utteranceId },
   };
   const completePacked = pack(completeMessage);
   websocketService.sendToSession(sessionId, completePacked, 'response.complete');
 
-  logger.info('Audio echo completed', {
+  // Enhanced echo completion logging
+  logger.info('🔊 Audio echo completed', {
     sessionId,
     utteranceId,
     chunkCount: buffer.chunks.length,
+    actualDuration: `${Date.now() - startTime}ms`,
   });
 }

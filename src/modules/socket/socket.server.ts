@@ -12,6 +12,10 @@ import { websocketShutdownConfig, websocketConfig } from '@/shared/config';
 import { sessionService, websocketService } from './services';
 import { MessagePackHelper, WebSocketUtils } from './utils';
 import { handleWebSocketMessage, handleConnectionError } from './handlers';
+import { sttController } from '@/modules/stt';
+
+// Environment flag to toggle between STT and echo mode
+const USE_STT = !!process.env.DEEPGRAM_API_KEY;
 
 /**
  * Initialize WebSocket server
@@ -43,11 +47,11 @@ export function initializeSocketServer(httpServer: HTTPServer): WebSocketServer 
 /**
  * Handle new WebSocket connection
  */
-function handleConnection(
+async function handleConnection(
   wss: WebSocketServer,
   ws: WebSocket,
   request: WebSocketUpgradeRequest
-): void {
+): Promise<void> {
   const clientIP = request.socket.remoteAddress || 'unknown';
   const userAgent = request.headers['user-agent'] || 'unknown';
 
@@ -67,8 +71,36 @@ function handleConnection(
   });
 
   // Store connection ID on WebSocket for later reference
-  (ws as ExtendedWebSocket).connectionId = connectionId;
-  (ws as ExtendedWebSocket).sessionId = session.sessionId;
+  const extWs = ws as ExtendedWebSocket;
+  extWs.connectionId = connectionId;
+  extWs.sessionId = session.sessionId;
+
+  // Initialize STT session immediately (session-level lifecycle)
+  let sttSessionCreated = false;
+  if (USE_STT) {
+    try {
+      await sttController.createSession(session.sessionId, {
+        sessionId: session.sessionId,
+        connectionId,
+        samplingRate: 16000, // Default, will be updated on audio.start if different
+        language: 'en-US', // Default, will be updated on audio.start if different
+      });
+      sttSessionCreated = true;
+      logger.info('STT session created on WebSocket connect', {
+        sessionId: session.sessionId,
+        connectionId
+      });
+    } catch (error) {
+      logger.error('Failed to create STT session on connect', {
+        sessionId: session.sessionId,
+        error
+      });
+      // Don't fail the entire connection - STT will be created as fallback on audio.start
+    }
+  }
+
+  // Store STT session status on WebSocket for cleanup
+  extWs.sttSessionCreated = sttSessionCreated;
 
   // Handle incoming messages
   ws.on('message', async (data: Buffer | string) => {
@@ -95,13 +127,13 @@ function handleConnection(
     true,
     session.sessionId
   );
-  
+
   logger.info('Sending connection ACK', {
     connectionId,
     sessionId: session.sessionId,
     eventId: connectionEventId,
   });
-  
+
   WebSocketUtils.safeSend(ws, ackMessage, 'connection ack');
 
   logger.debug('Connection handlers registered', {
@@ -113,12 +145,13 @@ function handleConnection(
 /**
  * Handle WebSocket disconnection
  */
-function handleDisconnect(
+async function handleDisconnect(
   ws: WebSocket,
   connectionId: string,
   code: number,
   reason: string
-): void {
+): Promise<void> {
+  const extWs = ws as ExtendedWebSocket;
   const session = sessionService.getSessionBySocketId(connectionId);
 
   logger.info('Client disconnected', {
@@ -137,6 +170,16 @@ function handleDisconnect(
       duration,
       state: session.state,
     });
+
+    // Close STT session and connection (session-level lifecycle)
+    if (USE_STT && extWs.sttSessionCreated && sttController.hasSession(session.sessionId)) {
+      try {
+        await sttController.endSession(session.sessionId);
+        logger.info('STT session closed on disconnect', { sessionId: session.sessionId });
+      } catch (error) {
+        logger.error('Failed to close STT session', { sessionId: session.sessionId, error });
+      }
+    }
   }
 
   // Delete session
@@ -148,7 +191,6 @@ function handleDisconnect(
   }
 
   // Stub: In Layer 2, we'll also cleanup:
-  // - STT WebSocket connections
   // - TTS WebSocket connections
   // - Abort any ongoing LLM requests
   // - Clear audio buffers

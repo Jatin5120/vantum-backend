@@ -4,7 +4,6 @@
 
 import { WebSocket } from 'ws';
 import type { IncomingMessage } from 'http';
-import type { UnpackedMessage } from '@Jatin5120/vantum-shared';
 
 /**
  * Extended WebSocket with connection metadata
@@ -13,6 +12,7 @@ import type { UnpackedMessage } from '@Jatin5120/vantum-shared';
 export interface ExtendedWebSocket extends WebSocket {
   connectionId: string;
   sessionId: string;
+  sttSessionCreated?: boolean; // Track if STT session was successfully created
 }
 
 /**
@@ -24,7 +24,3 @@ export interface WebSocketUpgradeRequest extends IncomingMessage {
     remoteAddress?: string;
   };
 }
-
-// Re-export UnpackedMessage from shared package for convenience
-export type { UnpackedMessage } from '@Jatin5120/vantum-shared';
-

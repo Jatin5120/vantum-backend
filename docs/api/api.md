@@ -189,7 +189,7 @@ API rate limits may apply based on:
 
 - Number of concurrent connections
 - Audio chunk frequency
-- Downstream API service limits (OpenAI, Deepgram, ElevenLabs, etc.)
+- Downstream API service limits (OpenAI, Deepgram, Cartesia, etc.)
 
 ---
 

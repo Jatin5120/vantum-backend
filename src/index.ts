@@ -8,7 +8,6 @@ import {
   shutdownSocketServer,
   getSocketStats,
 } from '@/modules/socket';
-import type { WebSocketServer } from 'ws';
 
 // Validate environment variables
 try {
@@ -29,7 +28,7 @@ app.use(express.json());
 app.get('/health', (req, res) => {
   const socketStats = getSocketStats(wss);
   const isWebSocketServerHealthy = wss !== undefined && socketStats.totalConnections >= 0;
-  
+
   res.json({
     status: isWebSocketServerHealthy ? 'ok' : 'degraded',
     message: 'Vantum API is running',
@@ -60,7 +59,7 @@ async function gracefulShutdown(signal: string): Promise<void> {
         logger.info('HTTP server closed');
         resolve();
       });
-      
+
       // Force close after timeout
       setTimeout(() => {
         logger.warn('HTTP server force closed after timeout');
@@ -70,6 +69,15 @@ async function gracefulShutdown(signal: string): Promise<void> {
 
     // Step 2: Shutdown WebSocket server (this handles WebSocket cleanup)
     await shutdownSocketServer(wss);
+
+    // Step 3: Shutdown STT service (Phase 3)
+    try {
+      const { sttController } = await import('@/modules/stt');
+      await sttController.shutdown();
+      logger.info('STT service shutdown complete');
+    } catch (error) {
+      logger.error('Error shutting down STT service', error as Error);
+    }
 
     logger.info('Graceful shutdown completed');
     process.exit(0);
@@ -102,4 +110,3 @@ httpServer.listen(env.PORT, () => {
     frontendUrl: env.FRONTEND_URL,
   });
 });
-
