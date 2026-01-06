@@ -17,7 +17,6 @@ export class STTSession implements STTSessionState {
   connectionId: string;
   deepgramLiveClient: ListenLiveClient | null = null;
   connectionState: ConnectionState = 'connecting';
-  accumulatedTranscript = '';
   interimTranscript = '';
   lastTranscriptTime: number;
   transcriptSegments: TranscriptSegment[] = [];
@@ -80,39 +79,59 @@ export class STTSession implements STTSessionState {
 
   addTranscript(text: string, confidence: number, isFinal: boolean): void {
     if (isFinal) {
-      const lengthBefore = this.accumulatedTranscript.length;
-      this.accumulatedTranscript += text + ' ';
-      const lengthAfter = this.accumulatedTranscript.length;
+      // Push final transcript segment to array (O(1) operation)
+      this.transcriptSegments.push({
+        text,
+        timestamp: Date.now(),
+        confidence,
+        isFinal: true,
+      });
 
       // Debug log to verify accumulation is working
+      const currentTranscript = this.getAccumulatedTranscript();
       logger.debug('📝 Accumulated final transcript', {
         sessionId: this.sessionId,
         chunkText: text,
         chunkLength: text.length,
-        lengthBefore,
-        lengthAfter,
-        accumulatedSoFar: this.accumulatedTranscript.substring(0, 100) + '...', // Show first 100 chars
+        totalSegments: this.transcriptSegments.filter((s) => s.isFinal).length,
+        totalLength: currentTranscript.length,
+        accumulatedSoFar: currentTranscript.substring(0, 100) + '...', // Show first 100 chars
       });
 
       this.interimTranscript = '';
     } else {
+      // Store interim transcript separately (not added to segments until final)
       this.interimTranscript = text;
-    }
 
-    this.transcriptSegments.push({
-      text,
-      timestamp: Date.now(),
-      confidence,
-      isFinal,
-    });
+      // Also store interim in segments for tracking purposes
+      this.transcriptSegments.push({
+        text,
+        timestamp: Date.now(),
+        confidence,
+        isFinal: false,
+      });
+    }
 
     this.lastTranscriptTime = Date.now();
     this.metrics.transcriptsReceived++;
   }
 
+  /**
+   * Get accumulated transcript from final segments (O(n) join operation)
+   * Only called when transcript is needed (finalization, metrics)
+   * @private Internal helper - use getFinalTranscript() for public API
+   */
+  private getAccumulatedTranscript(): string {
+    // Extract only final segments and join with spaces
+    return this.transcriptSegments
+      .filter((segment) => segment.isFinal)
+      .map((segment) => segment.text)
+      .join(' ');
+  }
+
   getFinalTranscript(): string {
-    // Return accumulated final transcripts
-    let finalTranscript = this.accumulatedTranscript.trim();
+    // Get accumulated final transcripts (O(n) join - only called on finalization)
+    let finalTranscript = this.getAccumulatedTranscript().trim();
 
     // Check if the last transcript segment is an unfinalized interim
     // This handles cases where the last utterance didn't get finalized before session ended
@@ -141,6 +160,16 @@ export class STTSession implements STTSessionState {
     }
 
     return finalTranscript;
+  }
+
+  /**
+   * Get accumulated transcript length for metrics
+   * Computes from segments array (O(n) but only called for metrics)
+   */
+  getAccumulatedTranscriptLength(): number {
+    return this.transcriptSegments
+      .filter((segment) => segment.isFinal)
+      .reduce((total, segment) => total + segment.text.length, 0);
   }
 
   getDuration(): number {

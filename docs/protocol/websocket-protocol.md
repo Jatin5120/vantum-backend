@@ -1,7 +1,7 @@
 # WebSocket Protocol Specification
 
-**Version**: 1.1.0
-**Last Updated**: 2024-12-27
+**Version**: 1.4.0
+**Last Updated**: 2026-01-04
 **Status**: Single Source of Truth
 
 This document defines the complete WebSocket protocol specification for the Vantum backend. All implementations must follow these specifications exactly.
@@ -23,6 +23,8 @@ This document defines the complete WebSocket protocol specification for the Vant
 - **Session ID is server-generated** (sent to client in `connection.ack`)
 - Responses echo back the same `eventId` and `sessionId` from the request
 - Error responses include `requestType` at top level
+- **TTS audio chunks share the SAME utteranceId per synthesis response** ⭐
+- **MVP: TTS triggers on manual "Stop recording" button** (automatic triggers planned)
 
 ## Table of Contents
 
@@ -231,21 +233,41 @@ Regular responses are sent by the server to provide data or signal events.
 
 **Response Types:**
 
+- `transcript.interim` - Interim transcript (partial, may change)
+- `transcript.final` - Final transcript (complete, won't change)
+- `audio.output.start` - TTS synthesis started (RESPONSE_START)
 - `conversation.response.start` - AI about to respond
 - `conversation.response.complete` - AI response complete
 - `audio.output.cancel` - User interrupted AI / stop response
-- `audio.output.chunk` - TTS audio chunk (see special format below)
+- `audio.output.chunk` - TTS audio chunk (RESPONSE_CHUNK, see special format below) ⭐
+- `audio.output.complete` - TTS synthesis complete (RESPONSE_COMPLETE)
 
-**Example - Response Start:**
+**Example - Transcript Final:**
 
 ```typescript
 {
-  eventType: "conversation.response.start",
+  eventType: "transcript.final",
   eventId: "01234567-89ab-cdef-0123-456789abcdef",  // Same as request
   sessionId: "fedcba98-7654-3210-fedc-ba9876543210",  // Same as request
   payload: {
-    utteranceId: "01234567-89ab-cdef-0123-456789abcdef",
-    timestamp: 1234567890
+    transcript: "Hello, how are you?",
+    confidence: 0.98,
+    timestamp: 1704415200000,
+    language: "en-US"
+  }
+}
+```
+
+**Example - Audio Output Start (RESPONSE_START):**
+
+```typescript
+{
+  eventType: "audio.output.start",
+  eventId: "01234567-89ab-cdef-0123-456789abcdef",  // Same as request
+  sessionId: "fedcba98-7654-3210-fedc-ba9876543210",  // Same as request
+  payload: {
+    utteranceId: "utterance-uuid-v7",  // ⭐ SAME for all chunks of this response
+    timestamp: 1704415200100
   }
 }
 ```
@@ -263,63 +285,121 @@ Regular responses are sent by the server to provide data or signal events.
 }
 ```
 
-#### Response Chunks (Special Format)
+#### Response Chunks (Special Format) ⭐ **UPDATED**
 
-**Critical:** All chunks for the same response share the **same `eventId`**, but each chunk has a **unique `utteranceId`** (time-ordered UUIDv7) used for ordering.
+**CRITICAL CHANGE (v1.3.0)**: All chunks for the **same synthesis response** now share the **SAME utteranceId**. This allows frontend to correlate chunks belonging to the same response.
 
 **Format:**
 
 - `eventType`: `"audio.output.chunk"`
-- `eventId`: **Same for all chunks** (from original request)
+- `eventId`: **Different for each chunk** (unique event ID per message)
 - `sessionId`: **Same for all chunks** (from original request)
-- `payload`: Contains unique `utteranceId` per chunk
+- `payload.utteranceId`: **SAME for all chunks of same response** ⭐ **CRITICAL**
+- `payload.audio`: Audio data (PCM 16-bit)
+- `payload.sampleRate`: Sample rate (48000 Hz)
 
-**Example - Multiple Chunks:**
+**Example - Multiple Chunks (SAME synthesis response):**
 
 ```typescript
-// Chunk 1
+// RESPONSE_START: Server starts synthesis
 {
-  eventType: "audio.output.chunk",
-  eventId: "req-123",  // SAME for all chunks
+  eventType: "audio.output.start",
+  eventId: "req-123",
   sessionId: "sess-456",
   payload: {
-    audio: Uint8Array,
-    utteranceId: "utt-001",  // UNIQUE per chunk, time-ordered UUIDv7
-    sampleRate: 16000
+    utteranceId: "utt-abc",  // ⭐ Generated ONCE for entire response
+    timestamp: 1704415200100
   }
 }
 
-// Chunk 2
+// RESPONSE_CHUNK 1
 {
   eventType: "audio.output.chunk",
-  eventId: "req-123",  // SAME as chunk 1
+  eventId: "event-001",  // UNIQUE event ID
   sessionId: "sess-456",
   payload: {
     audio: Uint8Array,
-    utteranceId: "utt-002",  // UNIQUE, different from chunk 1
-    sampleRate: 16000
+    utteranceId: "utt-abc",  // ⭐ SAME as RESPONSE_START
+    sampleRate: 48000
   }
 }
 
-// Chunk 3
+// RESPONSE_CHUNK 2
 {
   eventType: "audio.output.chunk",
-  eventId: "req-123",  // SAME as chunks 1 and 2
+  eventId: "event-002",  // UNIQUE event ID (different from chunk 1)
   sessionId: "sess-456",
   payload: {
     audio: Uint8Array,
-    utteranceId: "utt-003",  // UNIQUE, different from chunks 1 and 2
-    sampleRate: 16000
+    utteranceId: "utt-abc",  // ⭐ SAME as RESPONSE_START and chunk 1
+    sampleRate: 48000
+  }
+}
+
+// RESPONSE_CHUNK 3
+{
+  eventType: "audio.output.chunk",
+  eventId: "event-003",  // UNIQUE event ID (different from chunks 1 and 2)
+  sessionId: "sess-456",
+  payload: {
+    audio: Uint8Array,
+    utteranceId: "utt-abc",  // ⭐ SAME as RESPONSE_START and all chunks
+    sampleRate: 48000
+  }
+}
+
+// RESPONSE_COMPLETE: Synthesis finished
+{
+  eventType: "audio.output.complete",
+  eventId: "event-004",
+  sessionId: "sess-456",
+  payload: {
+    utteranceId: "utt-abc"  // ⭐ SAME as RESPONSE_START and all chunks
   }
 }
 ```
 
 **Key Points:**
 
-- ✅ Same `eventId` for all chunks (correlates to original request)
-- ✅ Unique `utteranceId` per chunk (time-ordered UUIDv7 for ordering)
-- ✅ No `sequenceNumber` field (replaced by unique `utteranceId`)
-- ✅ Client orders chunks by `utteranceId` (UUIDv7 is time-ordered)
+- ✅ **SAME `utteranceId`** for RESPONSE_START, all chunks, and RESPONSE_COMPLETE
+- ✅ **UNIQUE `eventId`** per message (each chunk has different eventId)
+- ✅ Frontend correlates chunks by **utteranceId** (all chunks with same utteranceId = same response)
+- ✅ Interruptions detected when **new utteranceId** appears (new response started)
+- ✅ No `sequenceNumber` field (not needed with consistent utteranceId)
+
+**Frontend Implementation:**
+
+```typescript
+// Track current playing utterance
+let currentUtteranceId: string | null = null;
+const audioQueue: AudioChunk[] = [];
+
+function handleMessage(message: EventMessage) {
+  if (message.eventType === 'audio.output.start') {
+    currentUtteranceId = message.payload.utteranceId;
+    audioQueue.length = 0; // Clear queue for new response
+  }
+
+  if (message.eventType === 'audio.output.chunk') {
+    if (message.payload.utteranceId === currentUtteranceId) {
+      // Same response - add to queue
+      audioQueue.push(message.payload.audio);
+    } else {
+      // New response - interruption detected!
+      audioQueue.length = 0; // Clear old queue
+      currentUtteranceId = message.payload.utteranceId;
+      audioQueue.push(message.payload.audio);
+    }
+  }
+
+  if (message.eventType === 'audio.output.complete') {
+    if (message.payload.utteranceId === currentUtteranceId) {
+      // This response is complete
+      currentUtteranceId = null;
+    }
+  }
+}
+```
 
 ---
 
@@ -427,15 +507,34 @@ This section lists all event types. For detailed specifications, see the [Messag
 - `audio.input.start` - Initialize voice session (see [Request Messages](#1-request-messages-client--server))
 - `audio.input.chunk` - Stream audio chunk (see [Request Messages](#1-request-messages-client--server))
 - `audio.input.end` - End voice session (see [Request Messages](#1-request-messages-client--server))
+  - **MVP**: Triggers TTS synthesis with accumulated transcript
 
 ### Server → Client Events
 
+#### Connection Events
 - `connection.lifecycle.ack` - Connection acknowledgment with server-generated sessionId (see [Connection ACK](#5-connection-ack-special-case))
-- `conversation.response.start` - AI about to respond (see [Regular Response Messages](#3-regular-response-messages-server--client))
-- `audio.output.chunk` - TTS audio chunk (see [Response Chunks](#response-chunks-special-format))
-- `conversation.response.complete` - AI response complete (see [Regular Response Messages](#3-regular-response-messages-server--client))
+
+#### STT Events (Deepgram)
+- `transcript.interim` - Interim transcript (partial, may change)
+- `transcript.final` - Final transcript (complete, won't change)
+
+#### TTS Events (Cartesia)
+- `audio.output.start` - TTS synthesis started (RESPONSE_START) (see [Regular Response Messages](#3-regular-response-messages-server--client))
+- `audio.output.chunk` - TTS audio chunk (RESPONSE_CHUNK) (see [Response Chunks](#response-chunks-special-format))
+- `audio.output.complete` - TTS synthesis complete (RESPONSE_COMPLETE) (see [Regular Response Messages](#3-regular-response-messages-server--client))
 - `audio.output.cancel` - User interrupted AI / stop response (see [Regular Response Messages](#3-regular-response-messages-server--client))
+
+#### Conversation Events (Future LLM Integration)
+- `conversation.response.start` - AI about to respond (see [Regular Response Messages](#3-regular-response-messages-server--client))
+- `conversation.response.complete` - AI response complete (see [Regular Response Messages](#3-regular-response-messages-server--client))
+
+#### Error Events
 - `audio.error.*` - Error for audio events (see [Error Response Messages](#4-error-response-messages-server--client))
+- `tts.error.*` - Error for TTS events (see [Error Response Messages](#4-error-response-messages-server--client))
+  - `tts.error.connection` - TTS WebSocket connection failed
+  - `tts.error.synthesis` - TTS audio generation failed
+  - `tts.error.timeout` - TTS request timed out
+  - `tts.error.general` - Generic TTS error
 - `conversation.error.*` - Error for conversation events (see [Error Response Messages](#4-error-response-messages-server--client))
 - `error.system.unknown` - Generic error for malformed messages (see [Error Response Messages](#4-error-response-messages-server--client))
 
@@ -444,6 +543,55 @@ This section lists all event types. For detailed specifications, see the [Messag
 ---
 
 ## Message Flow Examples
+
+### MVP Flow (STT → TTS with Manual Trigger) ⭐ **UPDATED**
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    participant STT as Deepgram STT
+    participant TTS as Cartesia TTS
+
+    Note over Client,TTS: Connection Establishment
+    Client->>Server: WebSocket Connect
+    Server->>Client: connection.lifecycle.ack<br/>(SERVER-GENERATED sessionId)
+    Note over Client: Save sessionId from connection.ack
+
+    Note over Client,TTS: Audio Input (User Speaks)
+    Client->>Server: audio.input.start<br/>(sessionId from ACK)
+    Server->>Client: ACK<br/>(same eventId, same sessionId)
+    Client->>Server: audio.input.chunk (48kHz audio) × N
+    Server->>STT: Resample to 16kHz, forward to Deepgram
+
+    Note over STT: Transcribing in real-time...
+    STT-->>Server: Transcript (interim)
+    Server->>Client: transcript.interim<br/>(partial transcript)
+    STT-->>Server: Transcript (is_final: true)
+    Server->>Client: transcript.final<br/>("Hello, how are you?")
+
+    Note over Client: User clicks "Stop recording" button
+    Client->>Server: audio.input.end (MANUAL trigger)
+
+    Note over Server: Finalize Deepgram transcript
+    Note over Server: Trigger TTS with accumulated text
+    Note over Server: Generate utteranceId ONCE<br/>(used for all chunks)
+    Server->>TTS: Synthesize accumulated transcript
+
+    Note over TTS: Synthesizing with Cartesia voice...
+    Server->>Client: audio.output.start<br/>(utteranceId: utt-abc)
+    TTS-->>Server: Audio Chunk 1 (16kHz)
+    Server->>Client: audio.output.chunk<br/>(utteranceId: utt-abc, 48kHz)
+    TTS-->>Server: Audio Chunk 2 (16kHz)
+    Server->>Client: audio.output.chunk<br/>(utteranceId: utt-abc, 48kHz)
+    TTS-->>Server: Audio Chunk N (16kHz)
+    Server->>Client: audio.output.chunk<br/>(utteranceId: utt-abc, 48kHz)
+
+    Server->>Client: audio.output.complete<br/>(utteranceId: utt-abc)
+    Note over Client: User hears ONLY Cartesia voice<br/>"Hello, how are you?"<br/>(NO echo of original audio)
+```
+
+### Standard Message Flow
 
 ```mermaid
 sequenceDiagram
@@ -461,12 +609,18 @@ sequenceDiagram
 
     Note over Client,Server: Streaming Chunks
     Client->>Server: audio.input.chunk<br/>(eventId: req-124)
-    Note over Server: Processes and generates response
-    Server->>Client: conversation.response.start<br/>(same eventId: req-124)
-    Server->>Client: audio.output.chunk<br/>(same eventId: req-124, utteranceId: utt-1)
-    Server->>Client: audio.output.chunk<br/>(same eventId: req-124, utteranceId: utt-2)
-    Server->>Client: audio.output.chunk<br/>(same eventId: req-124, utteranceId: utt-3)
-    Server->>Client: conversation.response.complete<br/>(same eventId: req-124)
+    Note over Server: Processes and generates response<br/>Generate utteranceId ONCE
+    Server->>Client: transcript.final<br/>(same eventId: req-124)
+
+    Note over Client: User clicks "Stop recording"
+    Client->>Server: audio.input.end
+    Note over Server: MVP: Manual trigger for TTS
+
+    Server->>Client: audio.output.start<br/>(utteranceId: utt-abc)
+    Server->>Client: audio.output.chunk<br/>(utteranceId: utt-abc)
+    Server->>Client: audio.output.chunk<br/>(utteranceId: utt-abc)
+    Server->>Client: audio.output.chunk<br/>(utteranceId: utt-abc)
+    Server->>Client: audio.output.complete<br/>(utteranceId: utt-abc)
 
     Note over Client,Server: Error Flow
     Client->>Server: Invalid request<br/>(eventId: req-125)
@@ -529,7 +683,117 @@ sequenceDiagram
 
 ---
 
-### Example 3: Streaming Response with Chunks
+### Example 3: MVP Flow (STT → TTS with Manual Trigger) ⭐ **UPDATED**
+
+**Step 1: User speaks, STT transcribes**
+
+```typescript
+// Client sends audio
+{
+  eventType: "audio.input.chunk",
+  eventId: "22222222-2222-2222-2222-222222222222",
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    audio: Uint8Array,
+    isMuted: false
+  }
+}
+
+// Server sends final transcript
+{
+  eventType: "transcript.final",
+  eventId: "22222222-2222-2222-2222-222222222222",  // Same as request
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    transcript: "Hello, how are you?",
+    confidence: 0.98,
+    timestamp: 1704415200000,
+    language: "en-US"
+  }
+}
+```
+
+**Step 2: User clicks "Stop recording" → TTS triggers** ⭐
+
+```typescript
+// Client sends audio.input.end (manual trigger)
+{
+  eventType: "audio.input.end",
+  eventId: "33333333-3333-3333-3333-333333333333",
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {}
+}
+
+// Server finalizes transcript and triggers TTS
+// TTS synthesis started - utteranceId generated ONCE
+{
+  eventType: "audio.output.start",
+  eventId: "event-001",
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    utteranceId: "44444444-4444-4444-4444-444444444444",  // ⭐ Generated ONCE
+    timestamp: 1704415200100
+  }
+}
+
+// Audio Chunk 1
+{
+  eventType: "audio.output.chunk",
+  eventId: "event-002",  // UNIQUE event ID
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    audio: Uint8Array,  // 48kHz PCM 16-bit (resampled from 16kHz Cartesia)
+    utteranceId: "44444444-4444-4444-4444-444444444444",  // ⭐ SAME as START
+    sampleRate: 48000
+  }
+}
+
+// Audio Chunk 2
+{
+  eventType: "audio.output.chunk",
+  eventId: "event-003",  // UNIQUE event ID (different from chunk 1)
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    audio: Uint8Array,
+    utteranceId: "44444444-4444-4444-4444-444444444444",  // ⭐ SAME as START and chunk 1
+    sampleRate: 48000
+  }
+}
+
+// Audio Chunk 3
+{
+  eventType: "audio.output.chunk",
+  eventId: "event-004",  // UNIQUE event ID (different from chunks 1 and 2)
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    audio: Uint8Array,
+    utteranceId: "44444444-4444-4444-4444-444444444444",  // ⭐ SAME as START and all chunks
+    sampleRate: 48000
+  }
+}
+
+// TTS synthesis complete
+{
+  eventType: "audio.output.complete",
+  eventId: "event-005",
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  payload: {
+    utteranceId: "44444444-4444-4444-4444-444444444444"  // ⭐ SAME as START and all chunks
+  }
+}
+```
+
+**Result**: User hears ONLY Cartesia's voice saying "Hello, how are you?" (NO echo of original audio)
+
+**MVP Behavior**:
+- TTS triggers on **manual "Stop recording" button** (audio.input.end)
+- No automatic synthesis during recording
+- No audio echo (removed for cleaner pipeline)
+- Future: Automatic VAD-based trigger (see [MVP Audio Pipeline Documentation](../architecture/mvp-audio-pipeline.md))
+
+---
+
+### Example 4: Streaming Response with Chunks (Future LLM Integration)
 
 **Client Request:**
 
@@ -545,7 +809,7 @@ sequenceDiagram
 }
 ```
 
-**Server Responses (same eventId, unique utteranceId per chunk):**
+**Server Responses (SAME utteranceId per chunk):**
 
 ```typescript
 // Response start
@@ -562,24 +826,24 @@ sequenceDiagram
 // Chunk 1
 {
   eventType: "audio.output.chunk",
-  eventId: "22222222-2222-2222-2222-222222222222",  // Same as request
+  eventId: "event-001",
   sessionId: "01934567-89ab-cdef-0123-456789abcd00",
   payload: {
     audio: Uint8Array,
-    utteranceId: "44444444-4444-4444-4444-444444444444",  // Unique
-    sampleRate: 16000
+    utteranceId: "33333333-3333-3333-3333-333333333333",  // ⭐ SAME
+    sampleRate: 48000
   }
 }
 
 // Chunk 2
 {
   eventType: "audio.output.chunk",
-  eventId: "22222222-2222-2222-2222-222222222222",  // Same as request
+  eventId: "event-002",
   sessionId: "01934567-89ab-cdef-0123-456789abcd00",
   payload: {
     audio: Uint8Array,
-    utteranceId: "55555555-5555-5555-5555-555555555555",  // Unique, different from chunk 1
-    sampleRate: 16000
+    utteranceId: "33333333-3333-3333-3333-333333333333",  // ⭐ SAME
+    sampleRate: 48000
   }
 }
 
@@ -596,7 +860,7 @@ sequenceDiagram
 
 ---
 
-### Example 4: Error Handling
+### Example 5: Error Handling
 
 **Client Request (Invalid):**
 
@@ -627,15 +891,39 @@ sequenceDiagram
 
 ---
 
+### Example 6: TTS Error Handling
+
+**Scenario: TTS synthesis fails**
+
+```typescript
+{
+  eventType: "tts.error.synthesis",  // TTS-specific error
+  eventId: "77777777-7777-7777-7777-777777777777",  // Same as original audio.input.end
+  sessionId: "01934567-89ab-cdef-0123-456789abcd00",
+  requestType: "audio.input.end",  // Original request that triggered TTS
+  payload: {
+    message: "Cartesia synthesis failed: connection timeout"
+  }
+}
+```
+
+---
+
 ## Implementation Notes
 
 1. **Session ID:** **Server-generated** (sent in `connection.ack`), always at top level, never in `payload`
 2. **Event ID Correlation:** Regular responses and errors echo the request `eventId`
 3. **Server-Initiated Events:** For events not tied to a request, generate new `eventId` (UUIDv7)
-4. **Chunk Ordering:** Use unique `utteranceId` per chunk (time-ordered UUIDv7) instead of `sequenceNumber`
+4. **Chunk Correlation:** ⭐ **All chunks for SAME response use SAME utteranceId** (generated once in `synthesizeText()`)
 5. **Error Event Type Conversion:** Generic and scalable (works for any event type prefix)
 6. **Request Type in Errors:** Always at top level, not in `payload`
 7. **Hierarchical Event Names:** Use new `domain.category.action` format (see [Event System Architecture](./event-system.md))
+8. **MVP TTS Trigger:** `audio.input.end` triggers TTS synthesis (manual "Stop recording" button) ⭐ **NEW**
+9. **No Audio Echo:** Original client audio is NOT echoed back (removed for cleaner pipeline) ⭐ **NEW**
+10. **TTS Events:** Follow same pattern as STT events (start → chunks → complete)
+11. **Audio Resampling:** All audio output is resampled to match client sample rate (48kHz for browser, 8kHz for Twilio)
+12. **Interruption Detection:** Frontend detects new response when utteranceId changes (see [Response Chunks](#response-chunks-special-format))
+13. **Future Enhancement:** Automatic VAD-based TTS trigger (see [MVP Audio Pipeline Documentation](../architecture/mvp-audio-pipeline.md))
 
 ---
 
@@ -643,6 +931,8 @@ sequenceDiagram
 
 - [Event System Architecture](./event-system.md) - Complete event reference (single EVENTS object)
 - [WebSocket Quick Reference](./websocket-quick-reference.md) - One-page quick lookup
+- **[MVP Audio Pipeline Documentation](../architecture/mvp-audio-pipeline.md)** - Current MVP flow and future roadmap ⭐ **NEW**
+- [TTS Service Documentation](../services/tts-service.md) - Complete TTS service API
 - [API Documentation](../api/api.md) - REST + WebSocket overview
 - [Architecture Documentation](../architecture/architecture.md) - System architecture
 - [Documentation Index](../README.md) - All documentation files

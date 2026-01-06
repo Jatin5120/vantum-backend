@@ -39,6 +39,12 @@ const createMockLiveClient = (): MockDeepgramLiveClient => {
         handlers.set(event, []);
       }
       handlers.get(event)!.push(handler);
+
+      // Auto-fire 'Open' event to prevent connection timeout
+      // Use process.nextTick to work with fake timers (executes before next event loop)
+      if (event === LiveTranscriptionEvents.Open) {
+        process.nextTick(() => handler());
+      }
     }),
 
     send: vi.fn(),
@@ -127,9 +133,11 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
   });
 
   afterEach(async () => {
-    vi.runAllTimers();
+    // CRITICAL: Shutdown service BEFORE clearing timers to stop keepAlive intervals
+    // Otherwise runAllTimers() tries to run infinite keepAlive loop (10000+ timers)
+    await sttService.shutdown({ restart: false });
+    vi.clearAllTimers(); // Clear remaining timers instead of running them
     vi.useRealTimers();
-    await sttService.shutdown({ restart: true });
   });
 
   // ========================================================================================
@@ -146,7 +154,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       // Setup: Metadata fires after 5ms (realistic)
       const metadataHandler = vi.fn();
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler.mockImplementation(() => {
             setTimeout(() => handler({ duration: 1.2, request_id: 'req-123' }), 5);
           });
@@ -173,7 +183,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       session!.addTranscript('test', 0.95, true);
 
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           setTimeout(() => handler({ duration: 1.0 }), 3);
         }
       });
@@ -202,7 +214,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       session!.addTranscript('first', 0.95, true);
 
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           setTimeout(() => handler({ duration: 1.0 }), 5);
         }
       });
@@ -231,10 +245,11 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       let metadataHandler: Function | null = null;
 
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
-        }
-        if (event === LiveTranscriptionEvents.Close) {
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -273,7 +288,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let transcriptHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Transcript) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Transcript) {
           transcriptHandler = () => {
             handler({ channel: { alternatives: [{ transcript: 'test', confidence: 0.95 }] }, is_final: true });
             throw new Error('Transcript handler error');
@@ -297,7 +314,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let transcriptHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Transcript) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Transcript) {
           transcriptHandler = handler;
         }
       });
@@ -311,7 +330,7 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
         });
 
         transcriptHandler({
-          channel: { alternatives: [{ transcript: 'second', confidence: 0.95 }] },
+          channel: { alternatives: [{ transcript: 'second', confidence: 0.93 }] },
           is_final: true,
         });
       }
@@ -329,7 +348,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let errorHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Error) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Error) {
           errorHandler = handler;
         }
       });
@@ -352,7 +373,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let errorHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Error) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Error) {
           errorHandler = handler;
         }
       });
@@ -375,7 +398,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let genericErrorHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === 'error') {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === 'error') {
           genericErrorHandler = handler;
         }
       });
@@ -401,7 +426,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let closeHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Close) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -423,7 +450,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let closeHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Close) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -447,7 +476,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -475,7 +506,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let speechStartedHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.SpeechStarted) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.SpeechStarted) {
           speechStartedHandler = handler;
         }
       });
@@ -495,7 +528,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let utteranceEndHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.UtteranceEnd) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.UtteranceEnd) {
           utteranceEndHandler = handler;
         }
       });
@@ -521,9 +556,12 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       const session = sttSessionService.getSession(testSessionId);
       session!.addTranscript('timeout test', 0.95, true);
 
-      // Mock: Never call Metadata handler
-      currentMockClient.on.mockImplementation(() => {
-        // No event emitted
+      // Mock: Never call Metadata handler (but still fire Open)
+      currentMockClient.on.mockImplementation((event: string, handler: Function) => {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        }
+        // No Metadata event emitted
       });
 
       // Act: Start finalization (timeout is 5000ms)
@@ -549,7 +587,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -580,7 +620,10 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       session!.addTranscript('second', 0.93, true);
       session!.addTranscript('third', 0.91, true);
 
-      currentMockClient.on.mockImplementation(() => {
+      currentMockClient.on.mockImplementation((event: string, handler: Function) => {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        }
         // Never fire Metadata
       });
 
@@ -626,7 +669,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -678,7 +723,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let closeHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Close) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -702,7 +749,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -730,8 +779,11 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       const session = sttSessionService.getSession(testSessionId);
       session!.addTranscript('test', 0.95, true);
 
-      currentMockClient.on.mockImplementation(() => {
-        // Never emit
+      currentMockClient.on.mockImplementation((event: string, handler: Function) => {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        }
+        // Never emit Metadata
       });
 
       // Act
@@ -780,10 +832,11 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       let closeHandler: Function | null = null;
 
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
-        }
-        if (event === LiveTranscriptionEvents.Close) {
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -821,10 +874,11 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       let closeHandler: Function | null = null;
 
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
-        }
-        if (event === LiveTranscriptionEvents.Close) {
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -858,7 +912,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -894,10 +950,11 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
       let metadataHandler: Function | null = null;
 
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Close) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
-        }
-        if (event === LiveTranscriptionEvents.Metadata) {
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -980,7 +1037,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -1007,7 +1066,9 @@ describe('STT Service - Finalization Flow with Error Injection', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });

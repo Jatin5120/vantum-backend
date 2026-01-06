@@ -35,6 +35,7 @@ This document records all significant architectural decisions made during the de
 11. [TTS Provider Selection (Cartesia)](#adr-011-tts-provider-selection-cartesia)
 12. [Server-Generated Session IDs](#adr-012-server-generated-session-ids)
 13. [Single Unified EVENTS Object](#adr-013-single-unified-events-object)
+14. [Cartesia SDK vs Raw WebSocket](#adr-014-cartesia-sdk-vs-raw-websocket)
 
 ---
 
@@ -796,6 +797,57 @@ EVENTS.audio.input.START  // 'audio.input.start'
 
 ---
 
+## ADR-014: Cartesia SDK vs Raw WebSocket
+
+**Date**: 2026-01-04
+**Status**: ✅ Accepted
+
+### Context
+
+For the TTS (Text-to-Speech) integration with Cartesia, we needed to choose between using their official SDK or implementing a raw WebSocket connection.
+
+### Decision
+
+Use `@cartesia/cartesia-js` SDK (v2.2.9) for TTS integration instead of implementing raw WebSocket connection.
+
+### Rationale
+
+- **Time Savings**: Saves 38-57 hours implementation time
+- **Type Safety**: Full TypeScript support with type definitions
+- **Automatic Conversion**: Handles camelCase ↔ snake_case conversion automatically
+- **Reliability**: Battle-tested by Cartesia's customer base
+- **Maintenance**: Active development, regular updates every 2-4 weeks
+- **Features**: Built-in error handling, reconnection, and protocol management
+
+### Alternatives Considered
+
+**Raw WebSocket Implementation**:
+- Pros: Full control, no dependencies
+- Cons: 38-57 hours implementation, ongoing maintenance burden, must handle protocol changes manually
+
+### Consequences
+
+**Positive**:
+- Faster development (30 min vs 38-57 hours)
+- More reliable (tested by many users)
+- Lower maintenance (SDK updates vs manual fixes)
+- Better DX with TypeScript types
+
+**Negative**:
+- Bundle size increase (+500KB, negligible)
+- Dependency on external SDK
+- Less control over low-level protocol
+
+**Trade-offs Accepted**: Dependency risk is acceptable given active maintenance and official maintainer.
+
+### See Full ADR
+
+For comprehensive analysis including NPM package metrics, GitHub activity, SDK vs raw comparison matrix, and implementation details, see:
+
+[cartesia-sdk-decision.md](./cartesia-sdk-decision.md)
+
+---
+
 ## Summary
 
 ### Decision Categories
@@ -804,12 +856,12 @@ EVENTS.audio.input.START  // 'audio.input.start'
 **Architecture**: ADR-004, ADR-005, ADR-006
 **Audio Processing**: ADR-002
 **User Experience**: ADR-007, ADR-008
-**External Services**: ADR-011
+**External Services**: ADR-011, ADR-014
 **Development Process**: ADR-010
 
 ### Status Overview
 
-- ✅ **Accepted**: All 13 decisions
+- ✅ **Accepted**: All 14 decisions
 - ❌ **Rejected**: 0
 - 🔄 **Superseded**: 0
 - ⚠️ **Deprecated**: 0

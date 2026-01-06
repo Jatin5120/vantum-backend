@@ -36,7 +36,7 @@ vi.mock('@/modules/stt/services/stt-session.service', () => {
     connectionId: 'test-connection',
     deepgramLiveClient: null,
     connectionState: 'connecting',
-    accumulatedTranscript: '',
+    // accumulatedTranscript removed,
     interimTranscript: '',
     config: { samplingRate: 16000, language: 'en-US', model: 'nova-2' },
     metrics: {
@@ -53,6 +53,7 @@ vi.mock('@/modules/stt/services/stt-session.service', () => {
     addTranscript: vi.fn(),
     getFinalTranscript: vi.fn(() => 'mock transcript'),
     getDuration: vi.fn(() => 45000),
+    getAccumulatedTranscriptLength: vi.fn(() => 13), // "mock transcript".length
     cleanup: vi.fn(),
   };
 
@@ -151,6 +152,7 @@ describe('STTService', () => {
         isActive: true,
         connectionState: 'connected',
         config: { samplingRate: 16000 },
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -175,6 +177,7 @@ describe('STTService', () => {
         },
         isActive: true,
         connectionState: 'error',
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -196,9 +199,9 @@ describe('STTService', () => {
         deepgramLiveClient: null,
         metrics: { chunksReceived: 0, chunksForwarded: 0, bufferedChunksDuringReconnection: 0 },
         touch: vi.fn(),
-    getReconnectionBufferSize: vi.fn().mockReturnValue(0),
-    addToReconnectionBuffer: vi.fn(),
+        getReconnectionBufferSize: vi.fn().mockReturnValue(0),
         addToReconnectionBuffer: vi.fn(),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -220,9 +223,9 @@ describe('STTService', () => {
         deepgramLiveClient: mockLiveClient,
         metrics: { chunksReceived: 0, chunksForwarded: 0 },
         touch: vi.fn(),
-    getReconnectionBufferSize: vi.fn().mockReturnValue(0),
-    addToReconnectionBuffer: vi.fn(),
+        getReconnectionBufferSize: vi.fn().mockReturnValue(0),
         addToReconnectionBuffer: vi.fn(),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -241,6 +244,7 @@ describe('STTService', () => {
           reconnections: 1,
           successfulReconnections: 1,
         },
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       // Simulate downtime tracking (120ms)
@@ -259,6 +263,7 @@ describe('STTService', () => {
           failedReconnections: 0,
         },
         isActive: true,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       // Simulate 3 rapid reconnection attempts
@@ -275,6 +280,7 @@ describe('STTService', () => {
       const mockSession = {
         sessionId: mockSessionId,
         getDuration: vi.fn(() => 60000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {
           chunksForwarded: 500,
           transcriptsReceived: 15,
@@ -285,7 +291,7 @@ describe('STTService', () => {
           totalDowntimeMs: 300,
           bufferedChunksDuringReconnection: 10,
         },
-        accumulatedTranscript: 'Test transcript',
+        // accumulatedTranscript: 'Test transcript',
         connectionState: 'connected',
         config: { samplingRate: 16000 },
       };
@@ -305,7 +311,7 @@ describe('STTService', () => {
     it('should include reconnection metrics in service-level aggregation', () => {
       const mockSessions = [
         {
-          accumulatedTranscript: 'test 1',
+          // accumulatedTranscript: 'test 1',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: {
             chunksForwarded: 100,
@@ -316,9 +322,10 @@ describe('STTService', () => {
             failedReconnections: 0,
           },
           getDuration: () => 1000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 2',
+          // accumulatedTranscript: 'test 2',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: {
             chunksForwarded: 200,
@@ -329,6 +336,7 @@ describe('STTService', () => {
             failedReconnections: 1,
           },
           getDuration: () => 2000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
       ];
 
@@ -361,12 +369,14 @@ describe('STTService', () => {
         sessionId: 'session-1',
         getFinalTranscript: vi.fn(() => 'transcript-1'),
         getDuration: vi.fn(() => 1000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {},
       };
       const mockSession2 = {
         sessionId: 'session-2',
         getFinalTranscript: vi.fn(() => 'transcript-2'),
         getDuration: vi.fn(() => 2000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {},
       };
 
@@ -392,6 +402,7 @@ describe('STTService', () => {
         cleanup: vi.fn(),
         getFinalTranscript: vi.fn(() => 'transcript'),
         getDuration: vi.fn(() => 1000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {},
       };
 
@@ -431,6 +442,7 @@ describe('STTService', () => {
           throw new Error('Cleanup error');
         }),
         getDuration: vi.fn(() => 1000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {},
         cleanup: vi.fn(),
       };
@@ -476,22 +488,25 @@ describe('STTService', () => {
     it('should track peakConcurrentSessions', () => {
       const mockSessions = [
         {
-          accumulatedTranscript: 'test 1',
+          // accumulatedTranscript: 'test 1',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 1000
+          getDuration: () => 1000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 2',
+          // accumulatedTranscript: 'test 2',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 2000
+          getDuration: () => 2000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 3',
+          // accumulatedTranscript: 'test 3',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 3000
+          getDuration: () => 3000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
       ];
 
@@ -519,6 +534,7 @@ describe('STTService', () => {
         getReconnectionBufferSize: vi.fn(() => 512),
         getFinalTranscript: vi.fn(() => 'transcript'),
         getDuration: vi.fn(() => 1000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {},
       };
 
@@ -538,22 +554,25 @@ describe('STTService', () => {
     it('should calculate averageSessionDurationMs', () => {
       const mockSessions = [
         {
-          accumulatedTranscript: 'test 1',
+          // accumulatedTranscript: 'test 1',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 1000
+          getDuration: () => 1000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 2',
+          // accumulatedTranscript: 'test 2',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 2000
+          getDuration: () => 2000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 3',
+          // accumulatedTranscript: 'test 3',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 3000
+          getDuration: () => 3000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
       ];
 
@@ -577,10 +596,11 @@ describe('STTService', () => {
     it('should estimate memory usage (1.5MB per session)', () => {
       // Each session: ~20 char transcript * 2 bytes + 1.5MB buffer = ~1.5MB
       const mockSessions = Array(5).fill(null).map((_, i) => ({
-        accumulatedTranscript: 'A'.repeat(786432), // ~1.5MB of text (786432 chars * 2 bytes)
+        // accumulatedTranscript: 'A'.repeat(786432), // ~1.5MB of text (786432 chars * 2 bytes)
         getReconnectionBufferSize: vi.fn(() => 0),
         metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-        getDuration: () => (i + 1) * 1000
+        getDuration: () => (i + 1) * 1000,
+        getAccumulatedTranscriptLength: vi.fn(() => 786432),
       }));
 
       vi.mocked(sttSessionService.getAllSessions).mockReturnValue(mockSessions as any);
@@ -595,16 +615,18 @@ describe('STTService', () => {
       // Start with 2 sessions
       let mockSessions = [
         {
-          accumulatedTranscript: 'test 1',
+          // accumulatedTranscript: 'test 1',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 1000
+          getDuration: () => 1000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 2',
+          // accumulatedTranscript: 'test 2',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 2000
+          getDuration: () => 2000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
       ];
 
@@ -616,10 +638,11 @@ describe('STTService', () => {
 
       // Increase to 5 sessions
       mockSessions = Array(5).fill(null).map((_, i) => ({
-        accumulatedTranscript: `test ${i + 1}`,
+        // accumulatedTranscript: `test ${i + 1}`,
         getReconnectionBufferSize: vi.fn(() => 512),
         metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-        getDuration: () => (i + 1) * 1000
+        getDuration: () => (i + 1) * 1000,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       }));
 
       vi.mocked(sttSessionService.getAllSessions).mockReturnValue(mockSessions as any);
@@ -635,10 +658,11 @@ describe('STTService', () => {
     it('should not decrease peak when session count decreases', () => {
       // Start with 5 sessions
       let mockSessions = Array(5).fill(null).map((_, i) => ({
-        accumulatedTranscript: `test ${i + 1}`,
+        // accumulatedTranscript: `test ${i + 1}`,
         getReconnectionBufferSize: vi.fn(() => 512),
         metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-        getDuration: () => (i + 1) * 1000
+        getDuration: () => (i + 1) * 1000,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       }));
 
       vi.mocked(sttSessionService.getAllSessions).mockReturnValue(mockSessions as any);
@@ -650,16 +674,18 @@ describe('STTService', () => {
       // Decrease to 2 sessions
       mockSessions = [
         {
-          accumulatedTranscript: 'test 1',
+          // accumulatedTranscript: 'test 1',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 1000
+          getDuration: () => 1000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test 2',
+          // accumulatedTranscript: 'test 2',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: { chunksForwarded: 0, transcriptsReceived: 0, errors: 0, reconnections: 0, successfulReconnections: 0, failedReconnections: 0 },
-          getDuration: () => 2000
+          getDuration: () => 2000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
       ];
 
@@ -688,9 +714,10 @@ describe('STTService', () => {
         config: { samplingRate: 16000 },
         metrics: { chunksReceived: 0, chunksForwarded: 0, errors: 0 },
         touch: vi.fn(),
-    getReconnectionBufferSize: vi.fn().mockReturnValue(0),
-    addToReconnectionBuffer: vi.fn(),
-    isReconnecting: false,
+        getReconnectionBufferSize: vi.fn().mockReturnValue(0),
+        addToReconnectionBuffer: vi.fn(),
+        isReconnecting: false,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -720,9 +747,10 @@ describe('STTService', () => {
         connectionState: 'connecting',
         metrics: { chunksReceived: 0, chunksForwarded: 0, errors: 0 },
         touch: vi.fn(),
-    getReconnectionBufferSize: vi.fn().mockReturnValue(0),
-    addToReconnectionBuffer: vi.fn(),
-    isReconnecting: false,
+        getReconnectionBufferSize: vi.fn().mockReturnValue(0),
+        addToReconnectionBuffer: vi.fn(),
+        isReconnecting: false,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -747,9 +775,10 @@ describe('STTService', () => {
         config: { samplingRate: 16000 },
         metrics: { chunksReceived: 0, chunksForwarded: 0, errors: 0 },
         touch: vi.fn(),
-    getReconnectionBufferSize: vi.fn().mockReturnValue(0),
-    addToReconnectionBuffer: vi.fn(),
-    isReconnecting: false,
+        getReconnectionBufferSize: vi.fn().mockReturnValue(0),
+        addToReconnectionBuffer: vi.fn(),
+        isReconnecting: false,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -773,9 +802,10 @@ describe('STTService', () => {
         config: { samplingRate: 16000 },
         metrics: { chunksReceived: 0, chunksForwarded: 0, errors: 9 },
         touch: vi.fn(),
-    getReconnectionBufferSize: vi.fn().mockReturnValue(0),
-    addToReconnectionBuffer: vi.fn(),
-    isReconnecting: false,
+        getReconnectionBufferSize: vi.fn().mockReturnValue(0),
+        addToReconnectionBuffer: vi.fn(),
+        isReconnecting: false,
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
       };
 
       vi.mocked(sttSessionService.getSession).mockReturnValue(mockSession as any);
@@ -796,6 +826,7 @@ describe('STTService', () => {
         sessionId: mockSessionId,
         getFinalTranscript: vi.fn(() => mockTranscript),
         getDuration: vi.fn(() => 60000),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: { chunksForwarded: 100, transcriptsReceived: 10, errors: 0 },
       };
 
@@ -824,6 +855,7 @@ describe('STTService', () => {
           throw new Error('Transcript error');
         }),
         getDuration: vi.fn(() => 0),
+        getAccumulatedTranscriptLength: vi.fn(() => 13),
         metrics: {},
       };
 
@@ -840,7 +872,7 @@ describe('STTService', () => {
     it('should aggregate metrics from all sessions', () => {
       const mockSessions = [
         {
-          accumulatedTranscript: 'test transcript one',
+          // accumulatedTranscript: 'test transcript one',
           getReconnectionBufferSize: vi.fn(() => 512),
           metrics: {
             chunksForwarded: 100,
@@ -851,9 +883,10 @@ describe('STTService', () => {
             failedReconnections: 0,
           },
           getDuration: () => 1000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test transcript two',
+          // accumulatedTranscript: 'test transcript two',
           getReconnectionBufferSize: vi.fn(() => 256),
           metrics: {
             chunksForwarded: 200,
@@ -864,9 +897,10 @@ describe('STTService', () => {
             failedReconnections: 0,
           },
           getDuration: () => 2000,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
         {
-          accumulatedTranscript: 'test transcript three',
+          // accumulatedTranscript: 'test transcript three',
           getReconnectionBufferSize: vi.fn(() => 128),
           metrics: {
             chunksForwarded: 150,
@@ -877,6 +911,7 @@ describe('STTService', () => {
             failedReconnections: 1,
           },
           getDuration: () => 1500,
+          getAccumulatedTranscriptLength: vi.fn(() => 13),
         },
       ];
 
@@ -911,13 +946,14 @@ describe('STTService', () => {
       const mockSession = {
         sessionId: mockSessionId,
         getDuration: vi.fn(() => 45000),
+        getAccumulatedTranscriptLength: vi.fn(() => 256),
         metrics: {
           chunksForwarded: 500,
           transcriptsReceived: 15,
           reconnections: 1,
           errors: 2,
         },
-        accumulatedTranscript: 'A'.repeat(256),
+        // accumulatedTranscript: 'A'.repeat(256),
         connectionState: 'connected',
         config: { samplingRate: 16000 },
       };

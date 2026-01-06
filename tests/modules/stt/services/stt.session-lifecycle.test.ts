@@ -114,7 +114,7 @@ describe('STT Service - Session-Level Connection Lifecycle', () => {
 
       // Assert: Transcript returned and state reset
       expect(result).toBe('Hello world');
-      expect(session!.accumulatedTranscript).toBe(''); // Reset
+      expect(session!.transcriptSegments).toEqual([]); // Reset
       expect(session!.interimTranscript).toBe(''); // Reset
       expect(session!.transcriptSegments).toEqual([]); // Reset
       expect(session!.metrics.finalizationMethod).toBe('event');
@@ -136,7 +136,7 @@ describe('STT Service - Session-Level Connection Lifecycle', () => {
       await finalizePromise;
 
       // Assert: All state reset
-      expect(session!.accumulatedTranscript).toBe('');
+      expect(session!.transcriptSegments).toEqual([]);
       expect(session!.interimTranscript).toBe('');
       expect(session!.transcriptSegments.length).toBe(0);
     });
@@ -255,7 +255,7 @@ describe('STT Service - Session-Level Connection Lifecycle', () => {
 
       // Assert: Returns accumulated transcript gracefully
       expect(result).toBe('Race condition test');
-      expect(session!.accumulatedTranscript).toBe(''); // Still reset
+      expect(session!.transcriptSegments).toEqual([]); // Still reset
     });
 
     it('should return accumulated transcript gracefully on null client', async () => {
@@ -290,7 +290,7 @@ describe('STT Service - Session-Level Connection Lifecycle', () => {
       await sttService.finalizeTranscript(testSessionId);
 
       // Assert: State still reset despite null client
-      expect(session!.accumulatedTranscript).toBe('');
+      expect(session!.transcriptSegments).toEqual([]);
       expect(session!.interimTranscript).toBe('');
       expect(session!.transcriptSegments).toEqual([]);
     });

@@ -1,7 +1,7 @@
 # Implementation Plan
 
-**Version**: 2.0.0
-**Last Updated**: 2024-12-27
+**Version**: 2.1.0
+**Last Updated**: 2026-01-04
 **Status**: Active
 
 ## Overview
@@ -12,7 +12,7 @@ This document outlines the phased implementation approach for the Vantum backend
 
 ## Implementation Status Overview
 
-**Current State (December 2024)**:
+**Current State (January 2026)**:
 
 ### Layer 1: ✅ COMPLETE (Grade A - 95.25%)
 - WebSocket infrastructure with binary MessagePack
@@ -22,9 +22,10 @@ This document outlines the phased implementation approach for the Vantum backend
 - Deepgram STT integration (✅ COMPLETE with 85%+ test coverage)
 - **Test Coverage**: 85%+ with 20 test files, 96+ test cases
 
-### Layer 2: 📝 PLANNED (Not Started)
+### Layer 2: 🚧 IN PROGRESS
+- **STT Integration**: ✅ COMPLETE (Deepgram, 85%+ coverage)
+- **TTS Integration**: 📋 **DESIGN COMPLETE** (Cartesia, ready for implementation)
 - **LLM Integration**: ❌ NOT STARTED (OpenAI GPT-4 planned)
-- **TTS Integration**: ❌ NOT STARTED (Cartesia planned)
 - **Conversation Orchestration**: ❌ NOT STARTED (State machine planned)
 - **Telephony Gateway**: ❌ NOT STARTED (Twilio integration planned)
 
@@ -217,7 +218,7 @@ This document outlines the phased implementation approach for the Vantum backend
 - ✅ Graceful shutdown on SIGTERM
 - ✅ Production-ready with comprehensive error handling
 - ✅ 85%+ test coverage
-- ✅ Ready for LLM integration (Phase 5)
+- ✅ Ready for TTS integration (Phase 5.5)
 
 ---
 
@@ -262,9 +263,84 @@ This document outlines the phased implementation approach for the Vantum backend
 
 ---
 
+### Phase 5.5: TTS Integration **← NEW PHASE**
+
+**Status**: 📋 **DESIGN COMPLETE - READY FOR IMPLEMENTATION** (2026-01-04)
+
+**Scope**: Cartesia TTS integration for AI voice responses (Echo Mode)
+
+**Documentation**:
+- [TTS Module Documentation](../modules/tts.md) - Complete TTS integration design **← NEW**
+- [WebSocket Protocol Specification](../protocol/websocket-protocol.md) - Updated with TTS events
+
+**Tasks**:
+
+**Week 1: Core TTS Module**
+- [ ] Create module structure (`/src/modules/tts/`)
+- [ ] Implement TTSService (basic synthesis)
+- [ ] Implement TTSSessionService (session management)
+- [ ] Implement TTSController (public API)
+- [ ] Implement TranscriptHandler (route transcripts to TTS)
+- [ ] Add TTS event types to @Jatin5120/vantum-shared
+- [ ] Integrate audio resampling (16kHz → 48kHz)
+- [ ] Basic error handling
+
+**Week 2: Production Hardening**
+- [ ] Implement reconnection logic with buffering
+- [ ] Add error classification and recovery
+- [ ] Implement state machine (TTSState)
+- [ ] Add comprehensive logging
+- [ ] Implement metrics and monitoring
+- [ ] Add cleanup timers
+- [ ] Implement graceful shutdown
+- [ ] Add keepalive mechanism
+
+**Week 3: Testing & Optimization**
+- [ ] Write E2E tests (full echo cycle)
+- [ ] Performance testing (latency validation <1s first chunk)
+- [ ] Load testing (10+ concurrent sessions)
+- [ ] Memory leak testing
+- [ ] Documentation updates
+- [ ] Code review and refinement
+
+**Dependencies**:
+- Phase 4 (STT Integration) - Complete ✅
+- AudioResamplerService (already complete) ✅
+- Cartesia SDK or REST API client
+
+**API Keys Required**:
+- `CARTESIA_API_KEY` in `.env`
+
+**Key Features**:
+- **Echo Mode**: User speech → STT → TTS → User hears Cartesia voice
+- **Persistent Connections**: One Cartesia WebSocket per session (eliminates connection overhead)
+- **Streaming Synthesis**: Audio chunks sent as received (<1s first chunk latency)
+- **Transparent Reconnection**: Automatic reconnection on network failures
+- **Future-Proof Design**: LLM insertion requires zero TTS refactoring
+
+**Performance Targets**:
+- TTS first chunk: <1s
+- Echo end-to-end: <3s (user stops speaking → AI starts speaking)
+- Memory per session: <300KB
+- Test coverage: 85%+
+
+**Deliverables**:
+- ✅ Echo mode working (speak → hear Cartesia voice back)
+- ✅ Streaming audio generation with <1s latency
+- ✅ Persistent Cartesia connections per session
+- ✅ Production-ready with comprehensive error handling
+- ✅ 85%+ test coverage
+- ✅ Ready for LLM integration (Phase 5)
+
+**Estimated Timeline**: 3 weeks
+
+**Note**: This validates the complete audio pipeline (STT → TTS) before LLM integration.
+
+---
+
 ### Phase 5: LLM Integration
 
-**Status**: ❌ **NOT STARTED** (Planned for Q1 2025)
+**Status**: ❌ **NOT STARTED** (Planned for Q1 2026)
 
 **Scope**: OpenAI GPT-4 integration for AI conversation
 
@@ -275,13 +351,15 @@ This document outlines the phased implementation approach for the Vantum backend
 - [ ] Create prompt engineering for cold outreach
 - [ ] Handle LLM responses with streaming
 - [ ] Add conversation state tracking (state machine)
+- [ ] Modify TranscriptHandler to route through LLM
 - [ ] Implement error handling and retries
 - [ ] Write comprehensive tests (unit, integration, E2E)
 - [ ] Achieve 85%+ test coverage
 
 **Dependencies**:
 - OpenAI SDK: `openai`
-- Phase 4 (STT Integration) must be complete
+- Phase 4 (STT Integration) must be complete ✅
+- Phase 5.5 (TTS Integration) must be complete
 
 **API Keys Required**:
 - `OPENAI_API_KEY` in `.env`
@@ -304,56 +382,17 @@ This document outlines the phased implementation approach for the Vantum backend
 
 ---
 
-### Phase 6: TTS Integration
+### Phase 6: TTS Integration (DEPRECATED - Now Phase 5.5)
 
-**Status**: ❌ **NOT STARTED** (Planned for Q1 2025)
+**This phase has been moved to Phase 5.5 and renamed to "TTS Integration (Echo Mode)" to validate the audio pipeline before LLM integration.**
 
-**Scope**: Cartesia TTS integration for AI voice responses
-
-**Tasks**:
-
-- [ ] Set up Cartesia API client
-- [ ] Implement text-to-speech conversion with streaming
-- [ ] Handle audio streaming from TTS
-- [ ] Add voice selection and configuration (backend-configured)
-- [ ] Implement error handling and retries
-- [ ] Add audio format conversion (16kHz → 48kHz browser, 8kHz Twilio)
-- [ ] Implement interruption handling
-- [ ] Write comprehensive tests (unit, integration, E2E)
-- [ ] Achieve 85%+ test coverage
-
-**Dependencies**:
-- Cartesia SDK or REST API client
-- Phase 5 (LLM Integration) must be complete
-- AudioResamplerService (already complete)
-
-**API Keys Required**:
-- `CARTESIA_API_KEY` in `.env`
-
-**References**:
-- [Cartesia API Documentation](https://cartesia.ai/docs)
-- [Cartesia Streaming TTS](https://cartesia.ai/docs/api-reference/tts)
-- [External Services Documentation](../integrations/external-services.md)
-- [Comprehensive Architecture - TTS Service](../comprehensive-architecture.md#2-tts-service-cartesia)
-
-**Planned Deliverables**:
-- Text-to-speech conversion working with Cartesia
-- Audio responses streaming in real-time
-- Audio streaming to client working
-- Voice selection implemented (backend-configured)
-- Integration with AudioResamplerService for output format conversion
-- Interruption handling implemented
-- Production-ready with 85%+ test coverage
-
-**Estimated Timeline**: 2-3 weeks
-
-**Note**: Changed from ElevenLabs to Cartesia per architectural decision.
+See Phase 5.5 above for current TTS implementation plan.
 
 ---
 
 ### Phase 7: Conversation Orchestration
 
-**Status**: ❌ **NOT STARTED** (Planned for Q1 2025)
+**Status**: ❌ **NOT STARTED** (Planned for Q1 2026)
 
 **Scope**: State machine and conversation flow orchestration
 
@@ -372,7 +411,7 @@ This document outlines the phased implementation approach for the Vantum backend
 **Dependencies**:
 - Phase 4 (STT) - Complete ✅
 - Phase 5 (LLM) - Must be complete
-- Phase 6 (TTS) - Must be complete
+- Phase 5.5 (TTS) - Must be complete
 
 **References**:
 - [State Machine Design](../comprehensive-architecture.md#state-machine-design)
@@ -391,7 +430,7 @@ This document outlines the phased implementation approach for the Vantum backend
 
 ### Phase 8: Telephony Integration
 
-**Status**: ❌ **NOT STARTED** (Planned for Q1 2025)
+**Status**: ❌ **NOT STARTED** (Planned for Q1 2026)
 
 **Scope**: Twilio phone call integration for production
 
@@ -409,7 +448,7 @@ This document outlines the phased implementation approach for the Vantum backend
 
 **Dependencies**:
 - Phase 7 (Conversation Orchestration) - Must be complete
-- AudioResamplerService (already supports 8kHz ↔ 16kHz)
+- AudioResamplerService (already supports 8kHz ↔ 16kHz) ✅
 
 **API Keys Required**:
 - `TWILIO_ACCOUNT_SID` in `.env`
@@ -433,7 +472,7 @@ This document outlines the phased implementation approach for the Vantum backend
 
 ### Phase 9: Integration & Testing
 
-**Status**: ❌ **NOT STARTED** (Planned for Q1 2025)
+**Status**: ❌ **NOT STARTED** (Planned for Q1 2026)
 
 **Scope**: Final integration, optimization, and production readiness
 
@@ -467,12 +506,12 @@ This document outlines the phased implementation approach for the Vantum backend
 
 ## Current Focus
 
-**Phase 4: STT Integration - ✅ COMPLETE**
+**Phase 5.5: TTS Integration - 📋 DESIGN COMPLETE**
 
-With STT integration complete, the next focus is:
+With STT integration complete and TTS design finalized, the next priority is:
 
-1. **Immediate**: Phase 5 (LLM Integration) - OpenAI GPT-4
-2. **Following**: Phase 6 (TTS Integration) - Cartesia
+1. **Immediate**: Phase 5.5 (TTS Integration - Echo Mode) - Cartesia
+2. **Following**: Phase 5 (LLM Integration) - OpenAI GPT-4
 3. **Then**: Phase 7 (Conversation Orchestration)
 4. **Finally**: Phase 8 (Telephony Integration)
 
@@ -483,8 +522,8 @@ With STT integration complete, the next focus is:
 - ✅ Phase 3.5: Audio Resampling (Complete)
 - ✅ Phase 4: STT Integration (Complete - 85%+ coverage)
 - 📋 Phase 4.5: Event System Migration (Design Complete)
-- ❌ Phase 5: LLM Integration (Not Started - Next Priority)
-- ❌ Phase 6: TTS Integration (Not Started)
+- 📋 Phase 5.5: TTS Integration (Design Complete - Ready for Implementation) **← NEXT PRIORITY**
+- ❌ Phase 5: LLM Integration (Not Started)
 - ❌ Phase 7: Conversation Orchestration (Not Started)
 - ❌ Phase 8: Telephony Integration (Not Started)
 - ❌ Phase 9: Integration & Testing (Not Started)
@@ -504,11 +543,11 @@ Phase 3.5 (Audio Resampling) ✅
     ↓
 Phase 4 (STT Integration) ✅
     ↓
-Phase 4.5 (Event System) 📋 ← Can run in parallel with Phase 5
+Phase 4.5 (Event System) 📋 ← Can run in parallel with Phase 5.5
     ↓
-Phase 5 (LLM Integration) ❌ ← NEXT PRIORITY
+Phase 5.5 (TTS Integration - Echo Mode) 📋 ← NEXT PRIORITY (validates pipeline)
     ↓
-Phase 6 (TTS Integration - Cartesia) ❌
+Phase 5 (LLM Integration) ❌
     ↓
 Phase 7 (Conversation Orchestration) ❌
     ↓
@@ -516,6 +555,8 @@ Phase 8 (Telephony Integration) ❌
     ↓
 Phase 9 (Integration & Testing) ❌
 ```
+
+**Note**: Phase 5.5 (TTS) moved before Phase 5 (LLM) to validate the complete audio pipeline in echo mode before adding LLM complexity.
 
 ---
 
@@ -544,9 +585,9 @@ Phase 9 (Integration & Testing) ❌
 - E2E tests: Complete flows
 
 **All External APIs Must Be Mocked**:
-- Deepgram (already mocked in tests)
-- OpenAI (to be mocked)
+- Deepgram (already mocked in tests) ✅
 - Cartesia (to be mocked)
+- OpenAI (to be mocked)
 - Twilio (to be mocked)
 
 ---
@@ -561,9 +602,9 @@ Phase 9 (Integration & Testing) ❌
 | Audio streaming latency | <50ms | ✅ Achieved |
 | Audio resampling overhead | <1ms per chunk | ✅ Achieved (<1ms) |
 | STT transcription latency | <500ms | ✅ Achieved |
+| TTS first chunk latency | <1s | ⏳ Target for Phase 5.5 |
 | LLM response generation | <2s | ⏳ Not yet measured |
-| TTS generation | <1s | ⏳ Not yet measured |
-| **End-to-end latency** | **<3s total** | ⏳ Target for Phase 9 |
+| **End-to-end echo latency** | **<3s total** | ⏳ Target for Phase 5.5 |
 
 ### Scalability Targets
 
@@ -596,8 +637,8 @@ Phase 9 (Integration & Testing) ❌
 - ✅ Deepgram (STT) - Real-time speech-to-text
 
 **Planned Integrations**:
+- ⏳ Cartesia (TTS) - Text-to-speech (Design Complete)
 - ⏳ OpenAI GPT-4 (LLM) - Conversation AI
-- ⏳ Cartesia (TTS) - Text-to-speech
 - ⏳ Twilio (Telephony) - Phone call infrastructure
 
 ### Cost Estimates (Per Minute)
@@ -606,14 +647,15 @@ Phase 9 (Integration & Testing) ❌
 |---------|----------------|-------|
 | Deepgram STT | ~$0.0125 | Nova-2 model |
 | OpenAI GPT-4 | ~$0.03-0.06 | Token-based |
-| Cartesia TTS | TBD | To be determined |
+| Cartesia TTS | ~$0.01-0.02 | Streaming API |
 | Twilio Voice | ~$0.014 | Outbound calls |
-| **Total Estimated** | **~$0.06-0.09** | Per call minute |
+| **Total Estimated** | **~$0.07-0.10** | Per call minute |
 
 ---
 
 ## Version History
 
+- **v2.1.0** (2026-01-04) - Added Phase 5.5 (TTS Integration - Echo Mode), updated protocol with TTS events, created TTS module documentation
 - **v2.0.0** (2024-12-27) - Major update: STT integration complete, updated to reflect actual implementation status and test coverage
 - **v1.1.0** (2024-12-27) - Updated with audio resampling completion, STT design completion
 - **v1.0.0** (2024-12-17) - Initial implementation plan
@@ -623,7 +665,8 @@ Phase 9 (Integration & Testing) ❌
 ## See Also
 
 - [Comprehensive Architecture](../comprehensive-architecture.md) - Complete system architecture
-- [WebSocket Protocol Specification](../protocol/websocket-protocol.md) - Protocol details
+- [WebSocket Protocol Specification](../protocol/websocket-protocol.md) - Protocol details (updated with TTS events)
+- [TTS Module Documentation](../modules/tts.md) - Complete TTS integration design **← NEW**
 - [Architecture Documentation](../architecture/architecture.md) - System design patterns
 - [Audio Resampling Architecture](../audio/audio-resampling.md) - Audio resampling design
 - [Setup Guide](./setup.md) - Development environment setup

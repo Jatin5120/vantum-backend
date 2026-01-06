@@ -39,7 +39,7 @@ describe('STTSession', () => {
       expect(session.config.model).toBe('nova-2');
       expect(session.deepgramLiveClient).toBeNull();
       expect(session.connectionState).toBe('connecting');
-      expect(session.accumulatedTranscript).toBe('');
+      expect(session.transcriptSegments).toEqual([]);
       expect(session.interimTranscript).toBe('');
       expect(session.isActive).toBe(true);
       expect(session.retryCount).toBe(0);
@@ -115,7 +115,7 @@ describe('STTSession', () => {
     it('should add final transcript to accumulated text', () => {
       session.addTranscript('Hello world', 0.95, true);
 
-      expect(session.accumulatedTranscript).toBe('Hello world ');
+      expect(session.getFinalTranscript()).toBe('Hello world');
       expect(session.interimTranscript).toBe('');
       expect(session.metrics.transcriptsReceived).toBe(1);
     });
@@ -123,7 +123,7 @@ describe('STTSession', () => {
     it('should set interim transcript for non-final results', () => {
       session.addTranscript('Hello', 0.85, false);
 
-      expect(session.accumulatedTranscript).toBe('');
+      expect(session.transcriptSegments.filter(s => s.isFinal)).toEqual([]);
       expect(session.interimTranscript).toBe('Hello');
       expect(session.metrics.transcriptsReceived).toBe(1);
     });
@@ -134,7 +134,7 @@ describe('STTSession', () => {
       session.addTranscript('from', 0.97, true);
       session.addTranscript('Vantum', 0.96, true);
 
-      expect(session.accumulatedTranscript).toBe('Hello world from Vantum ');
+      expect(session.getFinalTranscript()).toBe('Hello world from Vantum');
       expect(session.metrics.transcriptsReceived).toBe(4);
     });
 
@@ -144,7 +144,7 @@ describe('STTSession', () => {
 
       session.addTranscript('Hello', 0.95, true);
       expect(session.interimTranscript).toBe('');
-      expect(session.accumulatedTranscript).toBe('Hello ');
+      expect(session.getFinalTranscript()).toBe('Hello');
     });
 
     it('should update transcript segment history', () => {
@@ -185,7 +185,7 @@ describe('STTSession', () => {
     it('should handle empty transcripts', () => {
       session.addTranscript('', 0.0, true);
 
-      expect(session.accumulatedTranscript).toBe(' '); // Still adds space
+      expect(session.transcriptSegments.filter(s => s.isFinal)).toHaveLength(1);
       expect(session.metrics.transcriptsReceived).toBe(1);
     });
   });
@@ -207,14 +207,18 @@ describe('STTSession', () => {
       expect(result).toBe('');
     });
 
-    it('should not include interim transcripts', () => {
+    it('should include last interim transcript as fallback', () => {
+      // This tests the intentional fallback behavior where the last interim
+      // is appended if it hasn't been finalized (common when session ends)
       session.addTranscript('Final', 0.95, true);
       session.addTranscript('Interim', 0.85, false);
 
       const result = session.getFinalTranscript();
 
-      expect(result).toBe('Final');
-      expect(result).not.toContain('Interim');
+      // The last interim should be appended to final transcripts
+      expect(result).toBe('Final Interim');
+      expect(result).toContain('Final');
+      expect(result).toContain('Interim');
     });
   });
 

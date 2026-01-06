@@ -17,7 +17,7 @@ export interface STTSessionState {
   connectionState: ConnectionState;
 
   // Transcript Accumulation
-  accumulatedTranscript: string;
+  // NOTE: accumulatedTranscript removed - use transcriptSegments array for O(n) join instead of O(n²) concatenation
   interimTranscript: string;
   lastTranscriptTime: number;
   transcriptSegments: TranscriptSegment[];

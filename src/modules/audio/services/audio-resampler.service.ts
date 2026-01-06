@@ -152,6 +152,101 @@ class AudioResamplerServiceClass {
   }
 
   /**
+   * Resample audio to higher sample rate (for TTS playback)
+   *
+   * @param audioData - Int16 PCM audio buffer
+   * @param sourceSampleRate - Original sample rate (16000 for Cartesia)
+   * @param targetSampleRate - Target sample rate (48000 for browser playback)
+   * @returns Resampled Int16 PCM buffer at targetSampleRate
+   *
+   * @example
+   * // Cartesia audio (16kHz → 48kHz for browser playback)
+   * const resampled = await audioResamplerService.resampleToHigher(
+   *   cartesiaAudioChunk,
+   *   16000,
+   *   48000
+   * );
+   */
+  async resampleToHigher(
+    audioData: Buffer,
+    sourceSampleRate: number,
+    targetSampleRate: number
+  ): Promise<Buffer> {
+    try {
+      // Validate inputs
+      if (!audioData || audioData.length === 0) {
+        logger.warn('Empty audio data provided for upsampling', {
+          sourceSampleRate,
+          targetSampleRate,
+        });
+        return Buffer.alloc(0);
+      }
+
+      // Passthrough optimization: skip resampling if already at target rate
+      if (sourceSampleRate === targetSampleRate) {
+        logger.debug('Audio already at target sample rate, passthrough', {
+          sampleRate: targetSampleRate,
+        });
+        return audioData;
+      }
+
+      // Convert Buffer to Int16Array for wave-resampler
+      const inputSamples = new Int16Array(
+        audioData.buffer,
+        audioData.byteOffset,
+        audioData.length / 2
+      );
+
+      logger.debug('Starting upsampling', {
+        sourceSampleRate,
+        targetSampleRate,
+        inputSamples: inputSamples.length,
+        inputBytes: audioData.length,
+      });
+
+      // Resample using wave-resampler
+      const float64Output = resample(
+        inputSamples,
+        sourceSampleRate,
+        targetSampleRate,
+        { method: 'linear', LPF: false }
+      ) as Float64Array;
+
+      // Convert Float64Array back to Int16Array
+      const outputSamples = new Int16Array(float64Output.length);
+      for (let i = 0; i < float64Output.length; i++) {
+        const sample = Math.max(-32768, Math.min(32767, Math.round(float64Output[i])));
+        outputSamples[i] = sample;
+      }
+
+      // Convert Int16Array to Buffer
+      const outputBuffer = Buffer.from(
+        outputSamples.buffer,
+        outputSamples.byteOffset,
+        outputSamples.byteLength
+      );
+
+      logger.debug('Upsampling complete', {
+        inputSize: audioData.length,
+        outputSize: outputBuffer.length,
+        ratio: (outputBuffer.length / audioData.length).toFixed(2),
+        outputSamples: outputSamples.length,
+      });
+
+      return outputBuffer;
+    } catch (error) {
+      // Graceful degradation: log error and return original audio
+      logger.error('Audio upsampling failed, returning original audio', {
+        sourceSampleRate,
+        targetSampleRate,
+        error: error instanceof Error ? error.message : String(error),
+        stack: error instanceof Error ? error.stack : undefined,
+      });
+      return audioData;
+    }
+  }
+
+  /**
    * Calculate expected output size after resampling
    * Useful for buffer pre-allocation or validation
    *

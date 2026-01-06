@@ -13,6 +13,7 @@ export interface ExtendedWebSocket extends WebSocket {
   connectionId: string;
   sessionId: string;
   sttSessionCreated?: boolean; // Track if STT session was successfully created
+  ttsSessionCreated?: boolean; // Track if TTS session was successfully created
 }
 
 /**

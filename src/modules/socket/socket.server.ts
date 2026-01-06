@@ -13,9 +13,12 @@ import { sessionService, websocketService } from './services';
 import { MessagePackHelper, WebSocketUtils } from './utils';
 import { handleWebSocketMessage, handleConnectionError } from './handlers';
 import { sttController } from '@/modules/stt';
+import { ttsController } from '@/modules/tts';
+import { cartesiaConfig } from '@/modules/tts/config/cartesia.config';
 
 // Environment flag to toggle between STT and echo mode
 const USE_STT = !!process.env.DEEPGRAM_API_KEY;
+const USE_TTS = !!process.env.CARTESIA_API_KEY;
 
 /**
  * Initialize WebSocket server
@@ -102,6 +105,34 @@ async function handleConnection(
   // Store STT session status on WebSocket for cleanup
   extWs.sttSessionCreated = sttSessionCreated;
 
+  // Initialize TTS session immediately (session-level lifecycle)
+  let ttsSessionCreated = false;
+  if (USE_TTS) {
+    try {
+      await ttsController.initializeSession(session.sessionId, {
+        sessionId: session.sessionId,
+        connectionId,
+        voiceId: cartesiaConfig.voiceId,
+        language: cartesiaConfig.language,
+        speed: cartesiaConfig.speed,
+      });
+      ttsSessionCreated = true;
+      logger.info('TTS session created on WebSocket connect', {
+        sessionId: session.sessionId,
+        connectionId
+      });
+    } catch (error) {
+      logger.error('Failed to create TTS session on connect', {
+        sessionId: session.sessionId,
+        error
+      });
+      // Don't fail the entire connection - continue without TTS
+    }
+  }
+
+  // Store TTS session status on WebSocket for cleanup
+  extWs.ttsSessionCreated = ttsSessionCreated;
+
   // Handle incoming messages
   ws.on('message', async (data: Buffer | string) => {
     await handleWebSocketMessage(ws, data, connectionId);
@@ -171,6 +202,16 @@ async function handleDisconnect(
       state: session.state,
     });
 
+    // Close TTS session (before STT to stop audio output first)
+    if (USE_TTS && extWs.ttsSessionCreated && ttsController.hasSession(session.sessionId)) {
+      try {
+        await ttsController.endSession(session.sessionId);
+        logger.info('TTS session closed on disconnect', { sessionId: session.sessionId });
+      } catch (error) {
+        logger.error('Failed to close TTS session', { sessionId: session.sessionId, error });
+      }
+    }
+
     // Close STT session and connection (session-level lifecycle)
     if (USE_STT && extWs.sttSessionCreated && sttController.hasSession(session.sessionId)) {
       try {
@@ -190,8 +231,7 @@ async function handleDisconnect(
     websocketService.removeWebSocket(session.sessionId);
   }
 
-  // Stub: In Layer 2, we'll also cleanup:
-  // - TTS WebSocket connections
+  // Future Layer 2: We'll also cleanup:
   // - Abort any ongoing LLM requests
   // - Clear audio buffers
 }
@@ -221,7 +261,7 @@ export function getSocketStats(wss: WebSocketServer): {
   };
 } {
   const sessionStats = sessionService.getStats();
-  
+
   return {
     totalConnections: wss.clients.size,
     activeSessions: sessionStats.active,
@@ -238,7 +278,7 @@ export async function shutdownSocketServer(wss: WebSocketServer): Promise<void> 
   return new Promise((resolve) => {
     // First, close all WebSocket connections gracefully
     const closePromises: Promise<void>[] = [];
-    
+
     wss.clients.forEach((ws) => {
       const closePromise = new Promise<void>((closeResolve) => {
         ws.once('close', () => {
@@ -254,7 +294,7 @@ export async function shutdownSocketServer(wss: WebSocketServer): Promise<void> 
       .then(() => {
         // Cleanup all tracked WebSockets
         websocketService.cleanup();
-        
+
         // Close the server
         wss.close(() => {
           logger.info('WebSocket server closed');

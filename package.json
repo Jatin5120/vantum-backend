@@ -21,6 +21,7 @@
   "packageManager": "pnpm@10.25.0",
   "dependencies": {
     "@Jatin5120/vantum-shared": "^1.0.0",
+    "@cartesia/cartesia-js": "^2.2.9",
     "@deepgram/sdk": "^4.11.3",
     "cors": "^2.8.5",
     "dotenv": "^17.2.3",

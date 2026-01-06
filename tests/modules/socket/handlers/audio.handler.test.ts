@@ -1,29 +1,19 @@
 /**
  * Audio Handler Tests
- * Focus on handleAudioEnd buffer cleanup and STT integration
- * Target Coverage: 85%+ with critical memory leak prevention paths at 95%+
+ * Focus on handleAudioEnd WebSocket cleanup and STT integration
+ * Target Coverage: 85%+ with critical resource cleanup paths at 95%+
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { handleAudioEnd } from '@/modules/socket/handlers/audio.handler';
-import { audioBufferService } from '@/modules/socket/services/audio-buffer.service';
 import { sttController } from '@/modules/stt';
-import { sessionService } from '@/modules/socket/services';
+import { sessionService, websocketService } from '@/modules/socket/services';
 import { WebSocket } from 'ws';
 import type { UnpackedMessage } from '@Jatin5120/vantum-shared';
 import { VOICECHAT_EVENTS } from '@Jatin5120/vantum-shared';
 import { SessionState } from '@/modules/socket/types';
 
 // Mock services
-vi.mock('@/modules/socket/services/audio-buffer.service', () => ({
-  audioBufferService: {
-    clearBuffer: vi.fn(),
-    getBuffer: vi.fn(),
-    addChunk: vi.fn(),
-    initializeBuffer: vi.fn(),
-  },
-}));
-
 vi.mock('@/modules/stt', () => ({
   sttController: {
     finalizeTranscript: vi.fn(),
@@ -45,6 +35,7 @@ vi.mock('@/modules/socket/services', () => ({
     sendToSession: vi.fn(),
     hasWebSocket: vi.fn(),
     removeWebSocket: vi.fn(),
+    registerWebSocket: vi.fn(),
   },
 }));
 
@@ -90,59 +81,37 @@ describe('Audio Handler - handleAudioEnd', () => {
     vi.resetAllMocks();
   });
 
-  describe('Buffer Cleanup (CRITICAL - Memory Leak Prevention)', () => {
+  describe('WebSocket Lifecycle (MVP - Not Removed on audio.input.end)', () => {
     beforeEach(() => {
       // Enable STT mode for these tests
       process.env.DEEPGRAM_API_KEY = 'test-key';
     });
 
-    it('should clear buffer on successful finalization', async () => {
+    it('should NOT remove WebSocket on successful finalization (TTS may be active)', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Test transcript');
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: Buffer cleared
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket NOT removed (persists for TTS audio delivery)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
-    it('should clear buffer when finalization fails', async () => {
+    it('should NOT remove WebSocket when finalization fails', async () => {
       // Arrange: STT finalization throws error
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(
         new Error('Finalization failed')
       );
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: Buffer STILL cleared despite error
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket NOT removed even on error
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
-    it('should clear buffer when echo fails', async () => {
-      // Arrange: STT succeeds, but echo fails
-      vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Transcript');
-      vi.mocked(audioBufferService.getBuffer).mockImplementation(() => {
-        throw new Error('Echo failed');
-      });
-
-      // Act
-      await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
-
-      // Assert: Buffer STILL cleared despite echo error
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
-    });
-
-    it('should clear buffer on unexpected exception', async () => {
+    it('should NOT remove WebSocket on unexpected exception', async () => {
       // Arrange: Unexpected error in handler
       vi.mocked(sessionService.updateSessionState).mockImplementation(() => {
         throw new Error('Unexpected error');
@@ -151,45 +120,33 @@ describe('Audio Handler - handleAudioEnd', () => {
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: Buffer STILL cleared (finally block)
-      // Note: clearBuffer might not be called if error occurs before finally block
-      // This test ensures we don't leak memory even on unexpected errors
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket NOT removed in finally block
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
-    it('should always call clearBuffer in finally block', async () => {
+    it('should never call removeWebSocket (cleanup happens in disconnect handler)', async () => {
       // Arrange: Multiple failure points
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(
         new Error('STT failed')
       );
-      vi.mocked(audioBufferService.getBuffer).mockImplementation(() => {
-        throw new Error('Get buffer failed');
-      });
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: clearBuffer called exactly once in finally block
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledTimes(1);
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: removeWebSocket never called (disconnect handler manages cleanup)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
-    it('should clear buffer even when clearBuffer itself throws', async () => {
+    it('should leave WebSocket open for TTS audio delivery', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Transcript');
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
-      vi.mocked(audioBufferService.clearBuffer).mockImplementation(() => {
-        throw new Error('Clear buffer failed');
-      });
 
-      // Act: Should not throw
-      await expect(handleAudioEnd(mockWebSocket, mockData, testConnectionId)).resolves.not.toThrow();
+      // Act
+      await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: clearBuffer was attempted
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket remains open (allows TTS chunks to be sent)
+      // Note: Disconnect handler (socket.server.ts) handles final cleanup
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
   });
 
@@ -202,10 +159,6 @@ describe('Audio Handler - handleAudioEnd', () => {
     it('should call finalizeTranscript (not endSession)', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Final transcript');
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
@@ -220,10 +173,6 @@ describe('Audio Handler - handleAudioEnd', () => {
       // Arrange
       const mockTranscript = 'This is the final transcript';
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue(mockTranscript);
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
@@ -232,21 +181,17 @@ describe('Audio Handler - handleAudioEnd', () => {
       expect(sttController.finalizeTranscript).toHaveBeenCalled();
     });
 
-    it('should continue with echo despite STT error', async () => {
+    it('should continue gracefully despite STT error', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(
         new Error('STT service down')
       );
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [{ audio: new Uint8Array([1, 2, 3]) }],
-        startEventId: 'event-123',
-      } as any);
 
       // Act: Should not throw
       await expect(handleAudioEnd(mockWebSocket, mockData, testConnectionId)).resolves.not.toThrow();
 
-      // Assert: Echo still attempted
-      expect(audioBufferService.getBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket NOT removed (error doesn't change lifecycle)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
     it('should handle STT session not found gracefully', async () => {
@@ -254,16 +199,12 @@ describe('Audio Handler - handleAudioEnd', () => {
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(
         new Error('Session not found')
       );
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act: Should not crash
       await expect(handleAudioEnd(mockWebSocket, mockData, testConnectionId)).resolves.not.toThrow();
 
-      // Assert: Buffer still cleared
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket NOT removed (disconnect handler manages cleanup)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
   });
 
@@ -272,10 +213,6 @@ describe('Audio Handler - handleAudioEnd', () => {
       // Arrange
       process.env.DEEPGRAM_API_KEY = 'test-key';
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('');
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
@@ -304,19 +241,13 @@ describe('Audio Handler - handleAudioEnd', () => {
     });
   });
 
-  describe('Echo Mode (STT Disabled)', () => {
+  describe('MVP Behavior (No Audio Echo)', () => {
     let originalApiKey: string | undefined;
 
     beforeEach(() => {
-      // Save and remove API key to properly simulate echo mode
+      // Save API key
       originalApiKey = process.env.DEEPGRAM_API_KEY;
-      delete process.env.DEEPGRAM_API_KEY;
-
-      // Note: Since USE_STT is evaluated at module load time, we can't
-      // truly test echo mode without reloading the module. This test
-      // documents the expected behavior, but the constant will still be
-      // true if the env var was set when the test suite started.
-      // In production, echo mode is determined at server startup.
+      process.env.DEEPGRAM_API_KEY = 'test-key';
     });
 
     afterEach(() => {
@@ -326,34 +257,29 @@ describe('Audio Handler - handleAudioEnd', () => {
       }
     });
 
-    it('should skip STT finalization when STT disabled', async () => {
+    it('should NOT stream echoed audio back to client', async () => {
       // Arrange
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
+      vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Test transcript');
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: STT not called in true echo mode (if USE_STT is false)
-      // Note: This test may fail if DEEPGRAM_API_KEY was set at test suite startup
-      // because USE_STT is a module-level constant evaluated at load time
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: No RESPONSE_START, RESPONSE_CHUNK, or RESPONSE_COMPLETE sent
+      // (websocketService.sendToSession should NOT be called for echo)
+      expect(websocketService.sendToSession).not.toHaveBeenCalled();
     });
 
-    it('should still clear buffer in echo mode', async () => {
+    it('should finalize STT transcript without echoing', async () => {
       // Arrange
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
+      const transcript = 'User said something important';
+      vi.mocked(sttController.finalizeTranscript).mockResolvedValue(transcript);
 
       // Act
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
 
-      // Assert: Buffer cleared regardless of STT mode
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: STT finalized, but no echo/TTS audio streamed
+      expect(sttController.finalizeTranscript).toHaveBeenCalledWith(testSessionId);
+      expect(websocketService.sendToSession).not.toHaveBeenCalled();
     });
   });
 
@@ -389,10 +315,6 @@ describe('Audio Handler - handleAudioEnd', () => {
     it('should handle multiple rapid audio.end calls', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Transcript');
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act: Multiple rapid calls
       await Promise.all([
@@ -401,8 +323,8 @@ describe('Audio Handler - handleAudioEnd', () => {
         handleAudioEnd(mockWebSocket, mockData, testConnectionId),
       ]);
 
-      // Assert: clearBuffer called for each
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledTimes(3);
+      // Assert: WebSocket NOT removed (persists across multiple recording cycles)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
     it('should handle interleaved finalization and cleanup', async () => {
@@ -413,10 +335,6 @@ describe('Audio Handler - handleAudioEnd', () => {
         await new Promise(resolve => setTimeout(resolve, 10));
         return `Transcript ${finalizationCount}`;
       });
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act
       const promise1 = handleAudioEnd(mockWebSocket, mockData, testConnectionId);
@@ -424,71 +342,53 @@ describe('Audio Handler - handleAudioEnd', () => {
 
       await Promise.all([promise1, promise2]);
 
-      // Assert: Both completed successfully
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledTimes(2);
+      // Assert: Both completed successfully, WebSocket persists
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
   });
 
-  describe('Memory Leak Prevention (Stress Test)', () => {
+  describe('Resource Lifecycle (MVP - WebSocket Persists)', () => {
     beforeEach(() => {
       process.env.DEEPGRAM_API_KEY = 'test-key';
     });
 
-    it('should clear buffer in all error scenarios', async () => {
+    it('should NOT remove WebSocket in any error scenario', async () => {
       // Test 1: STT error
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(new Error('STT error'));
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({ chunks: [], startEventId: 'e1' } as any);
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
 
       vi.clearAllMocks();
 
-      // Test 2: Echo error
-      vi.mocked(sttController.finalizeTranscript).mockResolvedValue('OK');
-      vi.mocked(audioBufferService.getBuffer).mockImplementation(() => {
-        throw new Error('Echo error');
-      });
-      await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
-
-      vi.clearAllMocks();
-
-      // Test 3: Session error
+      // Test 2: Session error
       vi.mocked(sessionService.updateSessionState).mockImplementation(() => {
         throw new Error('Session error');
       });
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
 
       vi.clearAllMocks();
 
-      // Test 4: All errors combined
+      // Test 3: All errors combined
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(new Error('STT'));
-      vi.mocked(audioBufferService.getBuffer).mockImplementation(() => {
-        throw new Error('Echo');
-      });
       vi.mocked(sessionService.updateSessionState).mockImplementation(() => {
         throw new Error('Session');
       });
       await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
-    it('should not leak memory over 100 consecutive calls', async () => {
+    it('should not remove WebSocket over 100 consecutive calls', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Transcript');
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [{ audio: new Uint8Array(1000) }],
-        startEventId: 'event-123',
-      } as any);
 
-      // Act: 100 consecutive calls
+      // Act: 100 consecutive calls (simulating multiple recording cycles)
       for (let i = 0; i < 100; i++) {
         await handleAudioEnd(mockWebSocket, mockData, testConnectionId);
       }
 
-      // Assert: clearBuffer called 100 times (no leaks)
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledTimes(100);
+      // Assert: removeWebSocket never called (WebSocket persists across all cycles)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
   });
 
@@ -501,31 +401,27 @@ describe('Audio Handler - handleAudioEnd', () => {
       // Arrange
       const sttError = new Error('Deepgram connection lost');
       vi.mocked(sttController.finalizeTranscript).mockRejectedValue(sttError);
-      vi.mocked(audioBufferService.getBuffer).mockReturnValue({
-        chunks: [],
-        startEventId: 'event-123',
-      } as any);
 
       // Act: Should not throw
       await expect(handleAudioEnd(mockWebSocket, mockData, testConnectionId)).resolves.not.toThrow();
 
-      // Assert: Error logged (implicitly verified by no crash)
-      expect(audioBufferService.clearBuffer).toHaveBeenCalled();
+      // Assert: WebSocket NOT removed (error recovery doesn't trigger cleanup)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
 
-    it('should log echo errors without crashing', async () => {
+    it('should continue gracefully despite session error', async () => {
       // Arrange
       vi.mocked(sttController.finalizeTranscript).mockResolvedValue('Transcript');
-      const echoError = new Error('WebSocket closed during echo');
-      vi.mocked(audioBufferService.getBuffer).mockImplementation(() => {
-        throw echoError;
+      const sessionError = new Error('Session service down');
+      vi.mocked(sessionService.updateSessionState).mockImplementation(() => {
+        throw sessionError;
       });
 
       // Act: Should not throw
       await expect(handleAudioEnd(mockWebSocket, mockData, testConnectionId)).resolves.not.toThrow();
 
-      // Assert: Buffer still cleared
-      expect(audioBufferService.clearBuffer).toHaveBeenCalledWith(testSessionId);
+      // Assert: WebSocket NOT removed (disconnect handler manages cleanup)
+      expect(websocketService.removeWebSocket).not.toHaveBeenCalled();
     });
   });
 });

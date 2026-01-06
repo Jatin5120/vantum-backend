@@ -204,9 +204,18 @@ export class STTService {
       // Set finalization flag to prevent reconnection on Close event
       session.isFinalizingTranscript = true;
 
+      // P1 FIX: Clear keepAlive immediately when finalizing
+      if (session.keepAliveInterval) {
+        clearInterval(session.keepAliveInterval);
+        session.keepAliveInterval = undefined;
+        logger.debug('Cleared keepAlive interval during finalization', {
+          sessionId,
+        });
+      }
+
       logger.info('Finalizing transcript for recording cycle', {
         sessionId,
-        currentTranscript: session.accumulatedTranscript.substring(0, 50) + '...',
+        currentTranscript: session.getFinalTranscript().substring(0, 50) + '...',
       });
 
       const client = session.deepgramLiveClient;
@@ -218,7 +227,6 @@ export class STTService {
         });
         const finalTranscript = session.getFinalTranscript();
         // Reset state even if client is null
-        session.accumulatedTranscript = '';
         session.interimTranscript = '';
         session.transcriptSegments = [];
         return finalTranscript;
@@ -233,7 +241,6 @@ export class STTService {
         });
         // Don't send CloseStream, but still finalize transcript
         const finalTranscript = session.getFinalTranscript();
-        session.accumulatedTranscript = '';
         session.interimTranscript = '';
         session.transcriptSegments = [];
         // Reset finalization flag after delay
@@ -280,7 +287,6 @@ export class STTService {
       const finalTranscript = session.getFinalTranscript();
 
       // Reset transcript state for next recording
-      session.accumulatedTranscript = '';
       session.interimTranscript = '';
       session.transcriptSegments = [];
       session.lastTranscriptTime = Date.now();
@@ -767,6 +773,16 @@ export class STTService {
           isFinal,
         });
       }
+
+      // MVP: TTS synthesis is triggered manually on audio.input.end (user clicks "Stop recording")
+      // Automatic synthesis on transcript.final is planned for Phase 1 (future enhancement)
+      // This ensures user has explicit control during MVP development
+      if (isFinal) {
+        logger.debug('Final transcript received (not auto-triggering TTS in MVP)', {
+          sessionId,
+          transcript: transcript.substring(0, 50) + '...',
+        });
+      }
     } catch (error) {
       logger.error('Error processing transcript update', { sessionId, error });
       session.metrics.errors++;
@@ -944,6 +960,7 @@ export class STTService {
 
   /**
    * Start keepAlive mechanism (Phase 3: Deepgram recommended 8-10s)
+   * P1 FIX: Added defensive checks before sending keepAlive
    */
   private startKeepAlive(session: STTSession): void {
     // Clear existing keepAlive if any
@@ -953,11 +970,36 @@ export class STTService {
 
     session.keepAliveInterval = setInterval(() => {
       try {
-        const client = session.deepgramLiveClient;
-        if (client) {
-          client.keepAlive();
-          logger.debug('Sent keepAlive to Deepgram', { sessionId: session.sessionId });
+        // P1 FIX: Check finalization state first
+        if (session.isFinalizingTranscript) {
+          logger.debug('Skipping keepAlive - session is finalizing', {
+            sessionId: session.sessionId,
+          });
+          return;
         }
+
+        const client = session.deepgramLiveClient;
+        if (!client) {
+          logger.debug('Skipping keepAlive - no client', {
+            sessionId: session.sessionId,
+          });
+          return;
+        }
+
+        // P1 FIX: Check connection readyState before sending
+        const readyState = client.getReadyState();
+        if (readyState !== 1) {
+          // 1 = OPEN
+          logger.debug('Skipping keepAlive - connection not open', {
+            sessionId: session.sessionId,
+            readyState,
+            readyStateName: ['CONNECTING', 'OPEN', 'CLOSING', 'CLOSED'][readyState] || 'UNKNOWN',
+          });
+          return;
+        }
+
+        client.keepAlive();
+        logger.debug('Sent keepAlive to Deepgram', { sessionId: session.sessionId });
       } catch (error) {
         logger.error('Error sending keepAlive', { sessionId: session.sessionId, error });
       }
@@ -1054,7 +1096,7 @@ export class STTService {
     const sessions = sttSessionService.getAllSessions();
     return sessions.reduce((total, session) => {
       // Estimate: transcript length + buffer size
-      const transcriptSize = session.accumulatedTranscript.length * 2; // ~2 bytes per char
+      const transcriptSize = session.getAccumulatedTranscriptLength() * 2; // ~2 bytes per char
       const bufferSize = session.getReconnectionBufferSize();
       return total + transcriptSize + bufferSize;
     }, 0);
@@ -1078,7 +1120,7 @@ export class STTService {
       totalDowntimeMs: session.metrics.totalDowntimeMs,
       bufferedChunksDuringReconnection: session.metrics.bufferedChunksDuringReconnection,
       errors: session.metrics.errors,
-      finalTranscriptLength: session.accumulatedTranscript.length,
+      finalTranscriptLength: session.getAccumulatedTranscriptLength(),
       connectionState: session.connectionState,
     };
   }

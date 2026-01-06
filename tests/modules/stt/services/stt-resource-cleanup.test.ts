@@ -27,6 +27,12 @@ const createMockLiveClient = () => {
         handlers.set(event, []);
       }
       handlers.get(event)!.push(handler);
+
+      // Auto-fire 'Open' event to prevent connection timeout
+      // Use process.nextTick to work with fake timers (executes before next event loop)
+      if (event === LiveTranscriptionEvents.Open) {
+        process.nextTick(() => handler());
+      }
     }),
 
     send: vi.fn(),
@@ -47,8 +53,6 @@ const createMockLiveClient = () => {
     removeAllListeners: vi.fn(() => {
       handlers.clear();
     }),
-
-    getReadyState: vi.fn(() => 1),
 
     keepAlive: vi.fn(),
 
@@ -101,9 +105,11 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
   });
 
   afterEach(async () => {
-    vi.runAllTimers();
+    // CRITICAL: Shutdown service BEFORE runAllTimers to clear keepAlive intervals
+    // Otherwise runAllTimers() tries to run infinite keepAlive loop (10000+ timers)
+    await sttService.shutdown({ restart: false });
+    vi.clearAllTimers(); // Clear remaining timers instead of running them
     vi.useRealTimers();
-    await sttService.shutdown({ restart: true });
   });
 
   // ========================================================================================
@@ -128,7 +134,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -156,7 +164,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -196,7 +206,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -223,7 +235,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -287,7 +301,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let closeHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Close) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Close) {
           closeHandler = handler;
         }
       });
@@ -351,7 +367,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
@@ -379,8 +397,12 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
       const session = sttSessionService.getSession(testSessionId);
       session!.addTranscript('test', 0.95, true);
 
-      // Never fire metadata
-      currentMockClient.on.mockImplementation(() => {});
+      // Never fire metadata (but still fire Open)
+      currentMockClient.on.mockImplementation((event: string, handler: Function) => {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        }
+      });
 
       // Act: Finalize and wait for timeout
       const promise = sttService.finalizeTranscript(testSessionId);
@@ -401,7 +423,9 @@ describe('STT Service - Resource Cleanup and Memory Management', () => {
 
       let metadataHandler: Function | null = null;
       currentMockClient.on.mockImplementation((event: string, handler: Function) => {
-        if (event === LiveTranscriptionEvents.Metadata) {
+        if (event === LiveTranscriptionEvents.Open) {
+          setTimeout(() => handler(), 10);
+        } else if (event === LiveTranscriptionEvents.Metadata) {
           metadataHandler = handler;
         }
       });
