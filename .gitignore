@@ -3,3 +3,12 @@ dist
 .env
 *.log
 .DS_Store
+
+# Test coverage
+coverage/
+*.lcov
+.nyc_output/
+
+# Backup files
+*.bak
+*.backup
