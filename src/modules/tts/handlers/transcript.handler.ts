@@ -1,79 +1,68 @@
 /**
  * Transcript Handler
- * Routes final transcripts to TTS for synthesis
+ * Routes final transcripts to LLM then TTS for synthesis
  *
  * MVP BEHAVIOR: Called manually on audio.input.end (user clicks "Stop recording")
  * FUTURE: Will be called automatically on transcript.final (Phase 1+ enhancement)
  *
- * CRITICAL: This is where STT/Audio Handler connects to TTS!
- * Future LLM insertion only changes this handler - TTS remains unchanged
+ * CRITICAL: This is where STT → LLM → TTS pipeline connects!
  */
 
 import { logger } from '@/shared/utils';
 import { ttsController } from '../controllers';
+import { llmController } from '@/modules/llm';
 
 /**
  * Handle final transcript from STT
  * Triggered when user clicks "Stop recording" (manual trigger in MVP)
- * Routes transcript to TTS for synthesis
+ * Sends transcript to LLM for AI response, then routes response to TTS for synthesis
  *
  * @param transcript - Final transcript text from STT
  * @param sessionId - Session ID
  */
-export async function handleFinalTranscript(
-  transcript: string,
-  sessionId: string
-): Promise<void> {
+export async function handleFinalTranscript(transcript: string, sessionId: string): Promise<void> {
   try {
-    logger.info('Final transcript received for TTS', {
-      sessionId,
-      transcript: transcript.substring(0, 50) + '...',
-      length: transcript.length,
-    });
-
     // Validate transcript
     if (!transcript || transcript.trim().length === 0) {
-      logger.warn('Empty transcript, skipping TTS', { sessionId });
+      logger.warn('Empty transcript, skipping LLM', { sessionId });
       return;
     }
 
-    // Validate session exists
+    // Validate TTS session exists
     if (!ttsController.hasSession(sessionId)) {
       logger.warn('TTS session not found, skipping synthesis', { sessionId });
       return;
     }
 
-    // Send to TTS for synthesis (echo mode)
-    await ttsController.synthesize(sessionId, transcript);
-
-    logger.info('Transcript sent to TTS for synthesis', {
+    logger.info('Final transcript received, sending to LLM', {
       sessionId,
-      textLength: transcript.length,
+      transcript: transcript.substring(0, 50) + '...',
+      length: transcript.length,
+    });
+
+    // Step 1: Send transcript to LLM for AI response
+    const llmResponse = await llmController.generateResponse(sessionId, transcript);
+
+    logger.info('LLM response received', {
+      sessionId,
+      responseLength: llmResponse.text.length,
+      isFallback: llmResponse.isFallback,
+      preview: llmResponse.text.substring(0, 50) + '...',
+    });
+
+    // Step 2: Send LLM response to TTS (SAME API as echo mode)
+    await ttsController.synthesize(sessionId, llmResponse.text);
+
+    logger.info('LLM response sent to TTS for synthesis', {
+      sessionId,
+      textLength: llmResponse.text.length,
     });
   } catch (error) {
-    logger.error('Error handling final transcript for TTS', {
+    logger.error('Error handling final transcript for LLM', {
       sessionId,
       error: error instanceof Error ? error.message : String(error),
     });
-    // Don't rethrow - graceful degradation (conversation continues even if TTS fails)
+    // Fallback already handled by LLMController
+    // Don't rethrow - graceful degradation
   }
 }
-
-/**
- * Future LLM Integration (NOT IMPLEMENTED YET)
- *
- * When LLM is integrated, this handler will change to:
- *
- * export async function handleFinalTranscript(
- *   transcript: string,
- *   sessionId: string
- * ): Promise<void> {
- *   // Step 1: Send transcript to LLM
- *   const llmResponse = await llmController.generateResponse(sessionId, transcript);
- *
- *   // Step 2: Send LLM response to TTS (SAME API as echo mode)
- *   await ttsController.synthesize(sessionId, llmResponse.text);
- * }
- *
- * ZERO TTS REFACTORING REQUIRED!
- */

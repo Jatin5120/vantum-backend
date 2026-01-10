@@ -15,10 +15,12 @@ import { handleWebSocketMessage, handleConnectionError } from './handlers';
 import { sttController } from '@/modules/stt';
 import { ttsController } from '@/modules/tts';
 import { cartesiaConfig } from '@/modules/tts/config/cartesia.config';
+import { llmController } from '@/modules/llm';
 
 // Environment flag to toggle between STT and echo mode
 const USE_STT = !!process.env.DEEPGRAM_API_KEY;
 const USE_TTS = !!process.env.CARTESIA_API_KEY;
+const USE_LLM = !!process.env.OPENAI_API_KEY;
 
 /**
  * Initialize WebSocket server
@@ -91,12 +93,12 @@ async function handleConnection(
       sttSessionCreated = true;
       logger.info('STT session created on WebSocket connect', {
         sessionId: session.sessionId,
-        connectionId
+        connectionId,
       });
     } catch (error) {
       logger.error('Failed to create STT session on connect', {
         sessionId: session.sessionId,
-        error
+        error,
       });
       // Don't fail the entire connection - STT will be created as fallback on audio.start
     }
@@ -119,12 +121,12 @@ async function handleConnection(
       ttsSessionCreated = true;
       logger.info('TTS session created on WebSocket connect', {
         sessionId: session.sessionId,
-        connectionId
+        connectionId,
       });
     } catch (error) {
       logger.error('Failed to create TTS session on connect', {
         sessionId: session.sessionId,
-        error
+        error,
       });
       // Don't fail the entire connection - continue without TTS
     }
@@ -221,6 +223,16 @@ async function handleDisconnect(
         logger.error('Failed to close STT session', { sessionId: session.sessionId, error });
       }
     }
+
+    // Close LLM session (cleanup conversation context)
+    if (USE_LLM) {
+      try {
+        await llmController.endSession(session.sessionId);
+        logger.info('LLM session closed on disconnect', { sessionId: session.sessionId });
+      } catch (error) {
+        logger.error('Failed to close LLM session', { sessionId: session.sessionId, error });
+      }
+    }
   }
 
   // Delete session
@@ -230,10 +242,6 @@ async function handleDisconnect(
   if (session) {
     websocketService.removeWebSocket(session.sessionId);
   }
-
-  // Future Layer 2: We'll also cleanup:
-  // - Abort any ongoing LLM requests
-  // - Clear audio buffers
 }
 
 /**

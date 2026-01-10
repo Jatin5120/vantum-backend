@@ -27,6 +27,7 @@
     "dotenv": "^17.2.3",
     "express": "^5.2.1",
     "msgpackr": "^1.11.2",
+    "openai": "^6.15.0",
     "uuid": "^11.0.3",
     "wave-resampler": "^1.0.0",
     "ws": "^8.18.0"
