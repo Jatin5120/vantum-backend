@@ -52,8 +52,10 @@ export interface TTSSessionData {
   // Synthesis state
   ttsState: TTSState;
   currentUtteranceId: string | null;
+  currentUtteranceAudioBytes: number; // Track total audio bytes for current utterance (for duration calculation)
   textBuffer: string; // Buffer for incomplete sentences
   synthesisMutex: boolean; // P1-3: Prevents concurrent synthesis calls
+  synthesisPromise: { resolve: (duration: number) => void; reject: (error: Error) => void } | null; // Promise callbacks for awaiting synthesis completion (resolve with audio duration)
 
   // Configuration
   config: TTSConfig;

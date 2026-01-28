@@ -30,12 +30,13 @@ export class TTSController {
 
   /**
    * Synthesize text to speech (main entry point)
+   * Returns audio duration in milliseconds for playback timing
    */
   async synthesize(
     sessionId: string,
     text: string,
     options?: SynthesisOptions
-  ): Promise<void> {
+  ): Promise<number> {
     try {
       // Validate input
       if (!sessionId) {
@@ -44,7 +45,7 @@ export class TTSController {
 
       if (!text || text.trim().length === 0) {
         logger.warn('Empty text provided for synthesis', { sessionId });
-        return;
+        return 0;
       }
 
       logger.info('TTS synthesis requested', {
@@ -53,7 +54,8 @@ export class TTSController {
         preview: text.substring(0, 50) + '...',
       });
 
-      await ttsService.synthesizeText(sessionId, text, options);
+      const audioDurationMs = await ttsService.synthesizeText(sessionId, text, options);
+      return audioDurationMs;
     } catch (error) {
       logger.error('TTS synthesis failed', {
         sessionId,

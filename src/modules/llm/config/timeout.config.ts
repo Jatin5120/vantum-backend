@@ -1,12 +1,14 @@
 /**
  * Timeout Configuration
  * Session timeouts, cleanup intervals, and context limits
+ * P1-3 FIX: Added streamProcessingTimeoutMs for semantic streaming timeout
  */
 
 export const llmTimeoutConfig = {
   // Request timeouts
   requestTimeout: parseInt(process.env.LLM_REQUEST_TIMEOUT || '30000', 10), // 30s
   streamingTimeout: parseInt(process.env.LLM_STREAMING_TIMEOUT || '60000', 10), // 60s
+  streamProcessingTimeoutMs: parseInt(process.env.LLM_STREAM_PROCESSING_TIMEOUT || '30000', 10), // 30s for stream processing
 
   // Session timeouts
   sessionIdleTimeout: parseInt(process.env.LLM_SESSION_IDLE_TIMEOUT || '1800000', 10), // 30 min

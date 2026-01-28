@@ -12,26 +12,12 @@ import {
   ErrorType,
 } from '../utils/error-classifier';
 import type { STTConfig, STTServiceMetrics, STTSessionMetrics } from '../types';
-
-/**
- * Type definitions for Deepgram events
- */
-interface DeepgramTranscriptResponse {
-  channel?: {
-    alternatives?: Array<{
-      transcript: string;
-      confidence?: number;
-    }>;
-  };
-  is_final?: boolean;
-}
-
-interface DeepgramMetadata {
-  request_id?: string;
-  model_info?: unknown;
-  duration?: number;
-  [key: string]: unknown;
-}
+import {
+  isValidTranscriptResponse,
+  isValidMetadataResponse,
+  type DeepgramTranscriptResponse,
+  type DeepgramMetadataResponse,
+} from '../types/deepgram.types';
 
 export class STTService {
   private readonly apiKey: string;
@@ -309,6 +295,7 @@ export class STTService {
 
   /**
    * End STT session and close Deepgram connection
+   * P1-1 FIX: Clear finalization timeout before session deletion
    */
   async endSession(sessionId: string): Promise<string> {
     const session = this.getSessionOrWarn(sessionId, 'ending');
@@ -323,6 +310,15 @@ export class STTService {
 
       // Get final transcript before cleanup
       const finalTranscript = session.getFinalTranscript();
+
+      // P1-1 FIX: Clear finalization timeout before deletion
+      if (session.finalizationTimeoutHandle) {
+        clearTimeout(session.finalizationTimeoutHandle);
+        session.finalizationTimeoutHandle = undefined;
+        logger.debug('Cleared finalization timeout during session end', {
+          sessionId,
+        });
+      }
 
       // Cleanup session
       sttSessionService.deleteSession(sessionId);
@@ -342,6 +338,45 @@ export class STTService {
    */
   hasSession(sessionId: string): boolean {
     return sttSessionService.hasSession(sessionId);
+  }
+
+  /**
+   * Ensure Deepgram connection is ready for the session
+   * Reconnects if connection was closed during previous finalization
+   * Called before starting a new recording cycle
+   */
+  async ensureConnectionReady(sessionId: string): Promise<void> {
+    const session = sttSessionService.getSession(sessionId);
+    if (!session) {
+      throw new Error(`STT session not found: ${sessionId}`);
+    }
+
+    // Check if connection needs to be reopened
+    const client = session.deepgramLiveClient as ListenLiveClient | null;
+
+    if (!client || !client.getReadyState || client.getReadyState() === 3 /* CLOSED */) {
+      logger.info('Deepgram connection closed, reconnecting for new recording', {
+        sessionId,
+        readyState: client?.getReadyState?.() ?? 'null',
+      });
+
+      // Clear previous connection
+      session.deepgramLiveClient = null;
+
+      // Reconnect to Deepgram
+      const newConnection = await this.connectToDeepgram(session, 'reconnection');
+      session.deepgramLiveClient = newConnection;
+
+      // Re-register event listeners
+      this.setupDeepgramListeners(session, newConnection);
+
+      logger.info('Deepgram reconnected successfully', { sessionId });
+    } else {
+      logger.debug('Deepgram connection already ready', {
+        sessionId,
+        readyState: client.getReadyState(),
+      });
+    }
   }
 
   /**
@@ -525,14 +560,25 @@ export class STTService {
       };
     }
 
-    let metadataHandler: ((data: DeepgramMetadata) => void) | null = null;
+    let metadataHandler: ((data: DeepgramMetadataResponse) => void) | null = null;
 
     const promise = new Promise<void>((resolve) => {
-      metadataHandler = (_data: DeepgramMetadata) => {
+      metadataHandler = (data: unknown) => {
+        // P1-2 FIX: Validate metadata response with type guard
+        if (!isValidMetadataResponse(data)) {
+          logger.warn('Invalid Deepgram metadata response', {
+            sessionId: session.sessionId,
+            dataType: typeof data,
+          });
+          // Still resolve - fallback to timeout
+          resolve();
+          return;
+        }
+
         logger.info('Metadata event received (finalization complete)', {
           sessionId: session.sessionId,
-          duration: _data.duration,
-          request_id: _data.request_id,
+          duration: data.metadata?.duration,
+          request_id: data.metadata?.request_id,
         });
 
         session.metrics.finalizationMethod = 'event';
@@ -634,6 +680,7 @@ export class STTService {
   /**
    * Setup Deepgram event listeners (Phase 2: Enhanced with reconnection)
    * CRITICAL FIX: Accepts connection directly instead of checking null session.deepgramLiveClient
+   * P1-2 FIX: Use type guards for runtime validation of Deepgram responses
    */
   private setupDeepgramListeners(session: STTSession, connection: ListenLiveClient): void {
     if (!connection) {
@@ -649,13 +696,23 @@ export class STTService {
     // Transcript events
     connection.on(
       LiveTranscriptionEvents.Transcript,
-      this.createEventHandler<DeepgramTranscriptResponse>(
+      this.createEventHandler<unknown>(
         'Transcript',
-        (data) => {
+        (data: unknown) => {
+          // P1-2 FIX: Validate transcript response with type guard
+          if (!isValidTranscriptResponse(data)) {
+            logger.warn('Invalid Deepgram transcript response', {
+              sessionId: session.sessionId,
+              dataType: typeof data,
+              hasData: !!data,
+            });
+            return;
+          }
+
           logger.info('📥 Transcript event received from Deepgram', {
             sessionId: session.sessionId,
             hasData: !!data,
-            isFinal: data?.is_final,
+            isFinal: data.is_final,
           });
           this.handleTranscriptUpdate(session.sessionId, data);
         },
@@ -920,6 +977,7 @@ export class STTService {
 
   /**
    * Perform cleanup of stale sessions (Phase 3)
+   * P1-1 FIX: Clear finalization timeout before cleaning up stale sessions
    */
   private performCleanup(): void {
     try {
@@ -949,6 +1007,15 @@ export class STTService {
             durationMs: duration,
             connectionState: session.connectionState,
           });
+
+          // P1-1 FIX: Clear finalization timeout before cleanup
+          if (session.finalizationTimeoutHandle) {
+            clearTimeout(session.finalizationTimeoutHandle);
+            session.finalizationTimeoutHandle = undefined;
+            logger.debug('Cleared finalization timeout during stale session cleanup', {
+              sessionId: session.sessionId,
+            });
+          }
 
           this.endSession(session.sessionId);
         }
@@ -1134,6 +1201,7 @@ export class STTService {
 
   /**
    * Graceful shutdown (Phase 3: Enhanced with timeout handling)
+   * P1-1 FIX: Clear finalization timeout during shutdown
    */
   async shutdown(options: { restart?: boolean } = {}): Promise<void> {
     logger.info('STT service shutdown initiated', {
@@ -1155,6 +1223,15 @@ export class STTService {
     // 4. Close all sessions with timeout per session
     const shutdownPromises = activeSessions.map(async (session) => {
       try {
+        // P1-1 FIX: Clear finalization timeout during shutdown
+        if (session.finalizationTimeoutHandle) {
+          clearTimeout(session.finalizationTimeoutHandle);
+          session.finalizationTimeoutHandle = undefined;
+          logger.debug('Cleared finalization timeout during shutdown', {
+            sessionId: session.sessionId,
+          });
+        }
+
         const timeoutPromise = new Promise<string>((_resolve, reject) =>
           setTimeout(
             () => reject(new Error('Shutdown timeout')),

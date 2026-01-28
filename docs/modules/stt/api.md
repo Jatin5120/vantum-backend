@@ -172,6 +172,157 @@ logger.info('STT session ended', {
 
 ---
 
+#### `finalizeTranscript(sessionId: string): Promise<string>`
+
+Finalizes the current transcription segment without closing the Deepgram connection.
+
+**Parameters**:
+- `sessionId` (string): Session identifier
+
+**Returns**: `Promise<string>` - Final accumulated transcript for current segment (trimmed)
+
+**Behavior**:
+- Sends `CloseStream` message to Deepgram (finalizes current segment)
+- Closes the WebSocket connection (connection state becomes CLOSED)
+- Retrieves and returns the accumulated transcript
+- **Does NOT** clean up session state (session persists for reuse)
+- Returns empty string on error (graceful degradation)
+
+**Use Case**: Used when user stops recording but session continues (e.g., waiting for AI response).
+
+**Connection Lifecycle**:
+```
+audio.start → Connection OPEN
+    ↓
+audio.chunks → Transcription streaming
+    ↓
+audio.end → finalizeTranscript() → Connection CLOSED
+    ↓
+(AI responds, user waits)
+    ↓
+audio.start (again) → ensureConnectionReady() → Connection REOPENED
+```
+
+**Example**:
+```typescript
+// In audio.end handler
+const finalTranscript = await sttController.finalizeTranscript(session.sessionId);
+logger.info('Transcript finalized', {
+  sessionId,
+  transcriptLength: finalTranscript.length,
+  transcript: finalTranscript,
+});
+
+// Session still exists, connection closed
+// Next audio.start will reopen connection automatically
+```
+
+---
+
+#### `ensureConnectionReady(sessionId: string): Promise<void>`
+
+Ensures the Deepgram connection is ready for a new recording cycle. Reconnects if connection was closed during previous finalization.
+
+**Parameters**:
+- `sessionId` (string): Session identifier
+
+**Returns**: `Promise<void>`
+
+**Throws**: Error if session not found or reconnection fails
+
+**Behavior**:
+- Checks if Deepgram WebSocket connection is CLOSED (readyState === 3)
+- If closed, reopens connection using existing retry logic
+- Re-registers event listeners for new connection
+- If already open, does nothing (idempotent)
+
+**Use Case**: Called before starting a new recording cycle when STT session already exists.
+
+**When to Call**:
+- Before accepting audio chunks when session exists from previous recording
+- Typically called in `handleAudioStart()` when user clicks "Start Recording" again
+
+**Connection State Handling**:
+```
+First Recording Cycle:
+  audio.start → createSession() → Connection OPEN
+  audio.end → finalizeTranscript() → Connection CLOSED
+
+Second Recording Cycle:
+  audio.start → ensureConnectionReady() → Connection REOPENED ✅
+  audio.end → finalizeTranscript() → Connection CLOSED
+
+Third Recording Cycle:
+  audio.start → ensureConnectionReady() → Connection REOPENED ✅
+  ... (pattern repeats)
+```
+
+**Example**:
+```typescript
+// In audio.start handler
+if (USE_STT) {
+  if (!sttController.hasSession(session.sessionId)) {
+    // First recording cycle: Create new session
+    await sttController.createSession(session.sessionId, {
+      sessionId: session.sessionId,
+      connectionId,
+      samplingRate,
+      language: payload.language || 'en-US',
+    });
+  } else {
+    // Subsequent recording cycles: Ensure connection ready
+    await sttController.ensureConnectionReady(session.sessionId);
+  }
+}
+```
+
+**Error Handling**:
+```typescript
+try {
+  await sttController.ensureConnectionReady(session.sessionId);
+  logger.info('STT connection ready for new recording');
+} catch (error) {
+  logger.error('Failed to reopen STT connection', { sessionId, error });
+  sendError(
+    ws,
+    ErrorCode.INTERNAL_ERROR,
+    'Failed to initialize speech recognition',
+    VOICECHAT_EVENTS.AUDIO_START,
+    session.sessionId,
+    data.eventId
+  );
+  return;
+}
+```
+
+**Performance**: Connection reopen uses existing retry mechanism (500ms first retry, max 2s total).
+
+---
+
+#### `hasSession(sessionId: string): boolean`
+
+Checks if an STT session exists for the given sessionId.
+
+**Parameters**:
+- `sessionId` (string): Session identifier
+
+**Returns**: `boolean` - true if session exists, false otherwise
+
+**Use Case**: Used to determine whether to create new session or reuse existing one.
+
+**Example**:
+```typescript
+if (!sttController.hasSession(session.sessionId)) {
+  // First recording: Create session
+  await sttController.createSession(session.sessionId, config);
+} else {
+  // Subsequent recording: Ensure connection ready
+  await sttController.ensureConnectionReady(session.sessionId);
+}
+```
+
+---
+
 #### `getMetrics(): STTServiceMetrics`
 
 Returns service-level metrics for monitoring.
@@ -280,19 +431,49 @@ export async function handleAudioStart(ws: WebSocket, data: UnpackedMessage, con
   // ... session validation ...
 
   if (USE_STT) {
-    // NEW: Initialize STT session
-    try {
-      await sttController.createSession(session.sessionId, {
+    // Check if STT session exists (from previous recording cycle)
+    if (!sttController.hasSession(session.sessionId)) {
+      // First recording cycle: Create new STT session
+      try {
+        await sttController.createSession(session.sessionId, {
+          sessionId: session.sessionId,
+          connectionId,
+          samplingRate,
+          language: payload.language || 'en-US',
+        });
+        logger.info('STT session created', { sessionId: session.sessionId });
+      } catch (error) {
+        logger.error('Failed to create STT session', { sessionId, error });
+        sendError(
+          ws,
+          ErrorCode.INTERNAL_ERROR,
+          'Failed to initialize speech recognition',
+          VOICECHAT_EVENTS.AUDIO_START,
+          session.sessionId,
+          data.eventId
+        );
+        return;
+      }
+    } else {
+      // Subsequent recording cycles: Ensure Deepgram connection is ready
+      // Connection may have been closed during previous finalization
+      logger.info('STT session exists, ensuring connection ready', {
         sessionId: session.sessionId,
-        connectionId,
-        samplingRate,
-        language: payload.language || 'en-US',
       });
-      logger.info('STT session initialized', { sessionId: session.sessionId });
-    } catch (error) {
-      logger.error('Failed to initialize STT', { sessionId, error });
-      sendError(ws, ErrorCode.INTERNAL_ERROR, 'Failed to initialize transcription', VOICECHAT_EVENTS.AUDIO_START, session.sessionId, data.eventId);
-      return;
+      try {
+        await sttController.ensureConnectionReady(session.sessionId);
+      } catch (error) {
+        logger.error('Failed to ensure STT connection ready', { sessionId, error });
+        sendError(
+          ws,
+          ErrorCode.INTERNAL_ERROR,
+          'Failed to initialize speech recognition',
+          VOICECHAT_EVENTS.AUDIO_START,
+          session.sessionId,
+          data.eventId
+        );
+        return;
+      }
     }
   } else {
     // LEGACY: Echo testing
@@ -330,21 +511,56 @@ export async function handleAudioEnd(ws: WebSocket, data: UnpackedMessage, conne
   // ... session state update ...
 
   if (USE_STT) {
-    // NEW: End STT session and get transcript
-    const finalTranscript = await sttController.endSession(session.sessionId);
-    logger.info('STT session ended', {
+    // NEW: Finalize transcript (closes connection, keeps session)
+    const finalTranscript = await sttController.finalizeTranscript(session.sessionId);
+    logger.info('STT transcript finalized', {
       sessionId: session.sessionId,
       transcriptLength: finalTranscript.length,
-      transcript: finalTranscript.substring(0, 100),
+      transcript: finalTranscript,
     });
-    // TODO: Store transcript for LLM (Phase 5)
+
+    // Trigger LLM processing with transcript
+    // LLM will respond via TTS, then user can start recording again
+    // Session persists for multiple recording cycles
   } else {
     // LEGACY: Echo audio
     await streamEchoedAudio(session.sessionId, samplingRate);
     audioBufferService.clearBuffer(session.sessionId);
   }
 
-  // ... send ACK, cleanup WebSocket ...
+  // ... send ACK ...
+
+  // Note: WebSocket is NOT removed here (TTS synthesis may still be active)
+  // WebSocket cleanup happens in disconnect handler
+  // This allows multiple recording cycles per session
+}
+```
+
+### Disconnect Handler
+
+```typescript
+export function handleDisconnect(ws: WebSocket, connectionId: string) {
+  const session = sessionService.getSession(connectionId);
+  if (!session) return;
+
+  logger.info('Client disconnected, cleaning up', {
+    connectionId,
+    sessionId: session.sessionId,
+  });
+
+  // Clean up STT session (closes connection, removes session)
+  if (USE_STT) {
+    sttController.endSession(session.sessionId).catch((error) => {
+      logger.error('Error cleaning up STT session', { sessionId: session.sessionId, error });
+    });
+  }
+
+  // Clean up other resources
+  sessionService.deleteSession(connectionId);
+  websocketService.removeWebSocket(session.sessionId);
+
+  // Note: endSession() is only called on disconnect
+  // During recording cycles, use finalizeTranscript() + ensureConnectionReady()
 }
 ```
 
@@ -530,12 +746,53 @@ pnpm dev
 
 ## API Version History
 
+**v1.2.0** (2026-01-11) - Multiple Recording Cycles Support:
+- Added `finalizeTranscript()` method (closes connection, keeps session)
+- Added `ensureConnectionReady()` method (reopens connection for new recording)
+- Added `hasSession()` method (check session existence)
+- Updated lifecycle: Session persists across multiple recording cycles
+- Connection reopens automatically when starting new recording
+- Improved audio.start handler to support session reuse
+
+**v1.1.0** (2025-01-XX) - Production Enhancements:
+- Comprehensive error handling
+- Retry logic with exponential backoff
+- Connection lifecycle management
+- Memory cleanup and session timeouts
+- Metrics and observability
+
 **v1.0.0** (2024-12-24) - Phase 1 Complete:
 - Initial STT module implementation
 - Basic Deepgram integration
 - Session-based transcription
 - Socket module integration
 - Clean module boundaries
+
+---
+
+## Connection Lifecycle Summary
+
+**Session Lifecycle** (spans multiple recording cycles):
+```
+WebSocket connect → createSession() → Session CREATED
+    ↓
+audio.start → Connection OPEN
+audio.end → finalizeTranscript() → Connection CLOSED (session persists)
+    ↓
+(User waits, AI responds)
+    ↓
+audio.start → ensureConnectionReady() → Connection REOPENED
+audio.end → finalizeTranscript() → Connection CLOSED (session persists)
+    ↓
+... (repeat for multiple cycles)
+    ↓
+WebSocket disconnect → endSession() → Session DESTROYED
+```
+
+**Key Differences**:
+- `finalizeTranscript()`: Closes connection, keeps session (used on audio.end)
+- `endSession()`: Closes connection AND removes session (used on disconnect)
+- `ensureConnectionReady()`: Reopens connection if closed (used on subsequent audio.start)
 
 ---
 

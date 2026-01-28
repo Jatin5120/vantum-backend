@@ -162,6 +162,27 @@ class STTController {
   }
 
   /**
+   * Ensure Deepgram connection is ready for the session
+   * Reconnects if connection was closed during previous finalization
+   *
+   * @param sessionId - Session identifier
+   * @returns Promise that resolves when connection is ready
+   * @example
+   * ```typescript
+   * await sttController.ensureConnectionReady(sessionId);
+   * ```
+   */
+  async ensureConnectionReady(sessionId: string): Promise<void> {
+    try {
+      await sttService.ensureConnectionReady(sessionId);
+      logger.debug('STT connection ensured ready via controller', { sessionId });
+    } catch (error) {
+      logger.error('STT controller: Failed to ensure connection ready', { sessionId, error });
+      throw error;
+    }
+  }
+
+  /**
    * Health check to verify STT service is operational
    *
    * @returns true if service is healthy (API key configured), false otherwise

@@ -43,20 +43,16 @@ export async function handleFinalTranscript(transcript: string, sessionId: strin
     // Step 1: Send transcript to LLM for AI response
     const llmResponse = await llmController.generateResponse(sessionId, transcript);
 
-    logger.info('LLM response received', {
+    logger.info('LLM response received and streamed to TTS', {
       sessionId,
       responseLength: llmResponse.text.length,
       isFallback: llmResponse.isFallback,
       preview: llmResponse.text.substring(0, 50) + '...',
     });
 
-    // Step 2: Send LLM response to TTS (SAME API as echo mode)
-    await ttsController.synthesize(sessionId, llmResponse.text);
-
-    logger.info('LLM response sent to TTS for synthesis', {
-      sessionId,
-      textLength: llmResponse.text.length,
-    });
+    // NOTE: TTS synthesis is handled by LLM semantic streaming service
+    // The streaming service progressively sends chunks to TTS during LLM generation
+    // No need to send complete response here - would cause duplicate audio
   } catch (error) {
     logger.error('Error handling final transcript for LLM', {
       sessionId,

@@ -108,17 +108,42 @@ export const TTS_CONFIG = {
 
 ### Voice Configuration
 
-Voices are configured per-session when creating TTS session:
+**Vantum Curated Voices** (Production-Ready):
+
+| Voice | Gender | ID | Description |
+|-------|--------|-----|-------------|
+| **Kyle** (Default) | Male | `c961b81c-a935-4c17-bfb3-ba2239de8c2f` | Approachable Friend - Natural, friendly male voice |
+| **Tessa** | Female | `6ccbfb76-1fc6-48f7-b71d-91ac6298247b` | Kind Companion - Warm, professional female voice |
+
+**Current Default**: Kyle (male voice)
+
+**Switching Voices**:
+
+To change the default voice, update `cartesia.config.ts`:
 
 ```typescript
-const voiceConfig = {
-  voiceId: '694f9389-aac1-45b6-b726-9d9369183238', // Barbershop Man voice
-  language: 'en',
-  speed: 1.0, // Normal speed
-};
+// Use Kyle (male - default)
+voiceId: 'c961b81c-a935-4c17-bfb3-ba2239de8c2f'
+
+// OR use Tessa (female)
+voiceId: '6ccbfb76-1fc6-48f7-b71d-91ac6298247b'
 ```
 
-**Available Voices**: See [Cartesia Voice Library](https://docs.cartesia.ai/voices)
+**Runtime Voice Override**:
+
+You can override the voice per synthesis call:
+
+```typescript
+await ttsService.synthesizeText(sessionId, text, {
+  voiceId: '6ccbfb76-1fc6-48f7-b71d-91ac6298247b', // Use Tessa instead
+});
+```
+
+**Voice Selection Rationale**:
+- Both voices excel at emotional expression
+- Natural conversational tone suitable for cold calls
+- Clear pronunciation and professional delivery
+- Tested with various emotional contexts
 
 ---
 

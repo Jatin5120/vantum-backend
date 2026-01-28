@@ -1,6 +1,8 @@
 /**
  * Native WebSocket Server Initialization
  * Following thine's pattern with direct MessagePack handling
+ * P1-6 FIX: Parallel cleanup for disconnect handler
+ * P1-7 FIX: Added LLM session check before cleanup
  */
 
 import { WebSocketServer, WebSocket } from 'ws';
@@ -177,6 +179,8 @@ async function handleConnection(
 
 /**
  * Handle WebSocket disconnection
+ * P1-6 FIX: Parallel cleanup for faster disconnection
+ * P1-7 FIX: Added LLM session check before cleanup
  */
 async function handleDisconnect(
   ws: WebSocket,
@@ -204,35 +208,43 @@ async function handleDisconnect(
       state: session.state,
     });
 
-    // Close TTS session (before STT to stop audio output first)
-    if (USE_TTS && extWs.ttsSessionCreated && ttsController.hasSession(session.sessionId)) {
-      try {
-        await ttsController.endSession(session.sessionId);
-        logger.info('TTS session closed on disconnect', { sessionId: session.sessionId });
-      } catch (error) {
-        logger.error('Failed to close TTS session', { sessionId: session.sessionId, error });
-      }
-    }
+    // P1-6 FIX: Parallel cleanup instead of sequential
+    // OLD (sequential): TTS → STT → LLM one at a time
+    // NEW (parallel): All three cleanup simultaneously using Promise.allSettled
+    // Benefit: Faster disconnection (e.g., 6s → 2s if each takes 2s)
+    await Promise.allSettled([
+      // TTS cleanup (if session exists)
+      USE_TTS && extWs.ttsSessionCreated && ttsController.hasSession(session.sessionId)
+        ? ttsController.endSession(session.sessionId).then(() => {
+            logger.info('TTS session closed on disconnect', { sessionId: session.sessionId });
+          }).catch((error) => {
+            logger.error('Failed to close TTS session', { sessionId: session.sessionId, error });
+          })
+        : Promise.resolve(),
 
-    // Close STT session and connection (session-level lifecycle)
-    if (USE_STT && extWs.sttSessionCreated && sttController.hasSession(session.sessionId)) {
-      try {
-        await sttController.endSession(session.sessionId);
-        logger.info('STT session closed on disconnect', { sessionId: session.sessionId });
-      } catch (error) {
-        logger.error('Failed to close STT session', { sessionId: session.sessionId, error });
-      }
-    }
+      // STT cleanup (if session exists)
+      USE_STT && extWs.sttSessionCreated && sttController.hasSession(session.sessionId)
+        ? sttController.endSession(session.sessionId).then(() => {
+            logger.info('STT session closed on disconnect', { sessionId: session.sessionId });
+          }).catch((error) => {
+            logger.error('Failed to close STT session', { sessionId: session.sessionId, error });
+          })
+        : Promise.resolve(),
 
-    // Close LLM session (cleanup conversation context)
-    if (USE_LLM) {
-      try {
-        await llmController.endSession(session.sessionId);
-        logger.info('LLM session closed on disconnect', { sessionId: session.sessionId });
-      } catch (error) {
-        logger.error('Failed to close LLM session', { sessionId: session.sessionId, error });
-      }
-    }
+      // P1-7 FIX: LLM cleanup with session existence check
+      // OLD: Always attempted cleanup even if session doesn't exist
+      // NEW: Check llmController.hasSession() before cleanup
+      // Benefit: Avoids unnecessary work, cleaner logs
+      USE_LLM && llmController.hasSession && llmController.hasSession(session.sessionId)
+        ? llmController.endSession(session.sessionId).then(() => {
+            logger.info('LLM session closed on disconnect', { sessionId: session.sessionId });
+          }).catch((error) => {
+            logger.error('Failed to close LLM session', { sessionId: session.sessionId, error });
+          })
+        : Promise.resolve(),
+    ]);
+
+    logger.info('All service sessions ended (parallel)', { sessionId: session.sessionId });
   }
 
   // Delete session

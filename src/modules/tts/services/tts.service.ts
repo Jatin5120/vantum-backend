@@ -85,68 +85,84 @@ export class TTSService {
 
   /**
    * Synthesize text to speech
+   * Returns a Promise that resolves with audio duration in milliseconds (sequential playback support)
    */
   async synthesizeText(
     sessionId: string,
     text: string,
     options?: SynthesisOptions
-  ): Promise<void> {
+  ): Promise<number> {
     const session = this.getSessionOrWarn(sessionId, 'synthesizing text');
-    if (!session) return;
+    if (!session) return 0;
 
-    try {
-      // Validate text
-      if (!text || text.trim().length === 0) {
-        logger.warn('Empty text provided for synthesis', { sessionId });
-        return;
-      }
+    // Store listener references for cleanup
+    let enqueueHandler: ((context: any) => Promise<void>) | null = null;
+    let closeHandler: (() => void) | null = null;
+    let errorHandler: ((error: Error) => void) | null = null;
+    let audioSource: any = null;
 
-      if (text.length > TTS_CONSTANTS.MAX_TEXT_LENGTH) {
-        logger.warn('Text too long, truncating', {
-          sessionId,
-          originalLength: text.length,
-          maxLength: TTS_CONSTANTS.MAX_TEXT_LENGTH,
-        });
-        text = text.substring(0, TTS_CONSTANTS.MAX_TEXT_LENGTH);
-      }
+    // Wrap entire synthesis in a Promise that resolves with audio duration
+    return new Promise<number>((resolve, reject) => {
+      // Store Promise callbacks on session for event handlers to call
+      session.synthesisPromise = { resolve, reject };
 
-      // Update activity timestamp
-      session.touch();
+      (async () => {
+        try {
+          // Validate text
+          if (!text || text.trim().length === 0) {
+            logger.warn('Empty text provided for synthesis', { sessionId });
+            resolve(0); // Resolve with 0 duration for empty text
+            return;
+          }
 
-      // Check if session can synthesize
-      if (!session.canSynthesize()) {
-        logger.warn('Session cannot synthesize', {
-          sessionId,
-          state: session.ttsState,
-          connectionState: session.connectionState,
-        });
+          if (text.length > TTS_CONSTANTS.MAX_TEXT_LENGTH) {
+            logger.warn('Text too long, truncating', {
+              sessionId,
+              originalLength: text.length,
+              maxLength: TTS_CONSTANTS.MAX_TEXT_LENGTH,
+            });
+            text = text.substring(0, TTS_CONSTANTS.MAX_TEXT_LENGTH);
+          }
 
-        // Buffer text during reconnection
-        if (session.isReconnecting) {
-          session.addToReconnectionBuffer(text);
-        }
-        return;
-      }
+          // Update activity timestamp
+          session.touch();
 
-      // P1-3: Acquire synthesis lock immediately after canSynthesize check
-      if (session.synthesisMutex) {
-        logger.warn('Synthesis already in progress, skipping', {
-          sessionId,
-          textPreview: text.substring(0, 50) + '...',
-          currentState: session.ttsState,
-        });
-        return;
-      }
-      session.synthesisMutex = true;
+          // Check if session can synthesize
+          if (!session.canSynthesize()) {
+            logger.warn('Session cannot synthesize', {
+              sessionId,
+              state: session.ttsState,
+              connectionState: session.connectionState,
+            });
 
-      // Generate utteranceId for this synthesis response (used for all chunks)
-      const utteranceId = generateId();
-      session.currentUtteranceId = utteranceId;
+            // Buffer text during reconnection
+            if (session.isReconnecting) {
+              session.addToReconnectionBuffer(text);
+            }
+            resolve(0); // Resolve with 0 duration if cannot synthesize
+            return;
+          }
 
-      logger.info('Starting TTS synthesis', { sessionId, utteranceId, textLength: text.length });
+          // P1-3: Acquire synthesis lock immediately after canSynthesize check
+          if (session.synthesisMutex) {
+            logger.warn('Synthesis already in progress, skipping', {
+              sessionId,
+              textPreview: text.substring(0, 50) + '...',
+              currentState: session.ttsState,
+            });
+            resolve(0); // Resolve with 0 duration if mutex locked
+            return;
+          }
+          session.synthesisMutex = true;
 
-      // Transition to GENERATING state
-      session.transitionTo(TTSState.GENERATING);
+          // Generate utteranceId for this synthesis response (used for all chunks)
+          const utteranceId = generateId();
+          session.currentUtteranceId = utteranceId;
+
+          logger.info('Starting TTS synthesis', { sessionId, utteranceId, textLength: text.length });
+
+          // Transition to GENERATING state
+          session.transitionTo(TTSState.GENERATING);
 
       // Get Cartesia WebSocket client (stored as unknown, type assertion needed)
       const cartesiaWs = session.cartesiaClient;
@@ -174,6 +190,7 @@ export class TTSService {
 
       // Get the audio source from the response
       const source = response.source;
+      audioSource = source; // Store for cleanup
 
       // Track last processed index to avoid re-processing audio data
       let lastProcessedIndex = 0;
@@ -181,9 +198,8 @@ export class TTSService {
       // Listen for audio chunks from the source
       logger.debug('Registering Cartesia enqueue listener', { sessionId, utteranceId });
 
-      // Listen for 'enqueue' event (not 'chunk'!)
-      // The Cartesia SDK emits 'enqueue' when new audio data is available
-      source.on('enqueue', async () => {
+      // P0-2 FIX: Store listener reference for cleanup
+      enqueueHandler = async () => {
         try {
           // Read new audio data from source.buffer
           // source.writeIndex points to the end of available data
@@ -223,7 +239,11 @@ export class TTSService {
           });
           session.metrics.errors++;
         }
-      });
+      };
+
+      // Listen for 'enqueue' event (not 'chunk'!)
+      // The Cartesia SDK emits 'enqueue' when new audio data is available
+      source.on('enqueue', enqueueHandler);
 
       logger.debug('Enqueue listener registered', { sessionId, utteranceId });
 
@@ -260,8 +280,8 @@ export class TTSService {
         }
       }
 
-      // Listen for completion
-      source.on('close', () => {
+      // P0-2 FIX: Store listener reference for cleanup
+      closeHandler = () => {
         try {
           logger.debug('Audio source closed, synthesis complete', {
             sessionId,
@@ -274,18 +294,37 @@ export class TTSService {
           // The Cartesia SDK's audio source manages its own lifecycle and event listeners
           // Attempting to remove listeners here causes errors and prevents state transition
 
-          this.handleSynthesisComplete(session);
+          // Get audio duration from completion handler
+          const audioDurationMs = this.handleSynthesisComplete(session);
+
+          // Resolve the synthesis Promise with audio duration (enables sequential playback)
+          if (session.synthesisPromise) {
+            session.synthesisPromise.resolve(audioDurationMs);
+            session.synthesisPromise = null; // Clean up
+            logger.debug('Synthesis Promise resolved', { sessionId, utteranceId, audioDurationMs });
+          }
         } catch (error) {
           logger.error('Error handling synthesis complete', {
             sessionId: session.sessionId,
             utteranceId,
             error: error instanceof Error ? error.message : String(error),
           });
-        }
-      });
 
-      // Listen for errors
-      source.on('error', (error: Error) => {
+          // Reject Promise on error
+          if (session.synthesisPromise) {
+            session.synthesisPromise.reject(
+              error instanceof Error ? error : new Error(String(error))
+            );
+            session.synthesisPromise = null; // Clean up
+          }
+        }
+      };
+
+      // Listen for completion
+      source.on('close', closeHandler);
+
+      // P0-2 FIX: Store listener reference for cleanup
+      errorHandler = (error: Error) => {
         logger.error('🚨 Cartesia source error event', {
           sessionId,
           utteranceId,
@@ -300,6 +339,13 @@ export class TTSService {
           // after the error is handled and the source is closed
 
           this.handleCartesiaError(session, error);
+
+          // Reject the synthesis Promise on error
+          if (session.synthesisPromise) {
+            session.synthesisPromise.reject(error);
+            session.synthesisPromise = null; // Clean up
+            logger.debug('Synthesis Promise rejected due to Cartesia error', { sessionId, utteranceId });
+          }
         } catch (handlingError) {
           logger.error('Error in error handler', {
             sessionId,
@@ -307,51 +353,95 @@ export class TTSService {
             originalError: error,
             handlingError,
           });
+
+          // Reject Promise if not already done
+          if (session.synthesisPromise) {
+            session.synthesisPromise.reject(
+              handlingError instanceof Error ? handlingError : new Error(String(handlingError))
+            );
+            session.synthesisPromise = null; // Clean up
+          }
         }
-      });
+      };
 
-      // Increment metrics
-      session.metrics.textsSynthesized++;
+      // Listen for errors
+      source.on('error', errorHandler);
 
-      logger.info('TTS synthesis request sent', { sessionId, utteranceId });
-    } catch (error) {
-      logger.error('TTS synthesis failed', {
-        sessionId,
-        error: error instanceof Error ? error.message : String(error),
-      });
+          // Increment metrics
+          session.metrics.textsSynthesized++;
 
-      // P1-2 FIX: Defensive cleanup - Remove event listeners to prevent memory leak
-      // The SDK claims self-cleanup on close, but we do this defensively in case
-      // the error occurs before the 'close' event fires or if the SDK doesn't clean up
-      const source = (session as any).currentSource;
-      if (source) {
-        try {
-          source.off('enqueue');
-          source.off('close');
-          source.off('error');
-          logger.debug('Event listeners removed after synthesis error', { sessionId });
-        } catch (cleanupError) {
-          // Ignore cleanup errors - SDK may have already cleaned up or source may be invalid
-          logger.debug('Listener cleanup failed (may be already cleaned up)', {
+          logger.info('TTS synthesis request sent', { sessionId, utteranceId });
+          // Note: Method returns here but Promise is not resolved yet
+          // It will be resolved by the 'close' event handler when synthesis completes
+        } catch (error) {
+          logger.error('TTS synthesis failed', {
             sessionId,
-            cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+            error: error instanceof Error ? error.message : String(error),
           });
+
+          // P1-2 FIX: Defensive cleanup - Remove event listeners to prevent memory leak
+          // The SDK claims self-cleanup on close, but we do this defensively in case
+          // the error occurs before the 'close' event fires or if the SDK doesn't clean up
+          const source = (session as any).currentSource;
+          if (source) {
+            try {
+              source.off('enqueue');
+              source.off('close');
+              source.off('error');
+              logger.debug('Event listeners removed after synthesis error', { sessionId });
+            } catch (cleanupError) {
+              // Ignore cleanup errors - SDK may have already cleaned up or source may be invalid
+              logger.debug('Listener cleanup failed (may be already cleaned up)', {
+                sessionId,
+                cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+              });
+            }
+          }
+
+          session.metrics.synthesisErrors++;
+          session.metrics.errors++;
+          session.transitionTo(TTSState.ERROR);
+
+          // Send error to client
+          this.sendTTSError(sessionId, classifyCartesiaError(error));
+
+          // Reject the synthesis Promise
+          if (session.synthesisPromise) {
+            session.synthesisPromise.reject(
+              error instanceof Error ? error : new Error(String(error))
+            );
+            session.synthesisPromise = null; // Clean up
+          }
+        } finally {
+          // P1-3 FIX: Always release mutex, even on error
+          session.synthesisMutex = false;
+
+          // P0-2 FIX: CRITICAL - Remove all event listeners to prevent memory leak
+          // P2-2 FIX: Added clarifying comment about finally block behavior
+          // Finally block ensures cleanup runs in ALL paths (success, error, early return)
+          if (audioSource) {
+            try {
+              if (enqueueHandler) {
+                audioSource.off('enqueue', enqueueHandler);
+              }
+              if (closeHandler) {
+                audioSource.off('close', closeHandler);
+              }
+              if (errorHandler) {
+                audioSource.off('error', errorHandler);
+              }
+              logger.debug('Cleaned up audio source event listeners', { sessionId });
+            } catch (cleanupError) {
+              // Ignore cleanup errors - SDK may have already cleaned up
+              logger.debug('Listener cleanup error in finally block (may be already cleaned up)', {
+                sessionId,
+                cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
+              });
+            }
+          }
         }
-      }
-
-      session.metrics.synthesisErrors++;
-      session.metrics.errors++;
-      session.transitionTo(TTSState.ERROR);
-
-      // Send error to client
-      this.sendTTSError(sessionId, classifyCartesiaError(error));
-
-      // Rethrow error for caller to handle
-      throw error;
-    } finally {
-      // P1-3 FIX: Always release mutex, even on error
-      session.synthesisMutex = false;
-    }
+      })(); // Close async IIFE
+    });
   }
 
   /**
@@ -515,6 +605,9 @@ export class TTSService {
       if (session.ttsState === TTSState.GENERATING) {
         session.transitionTo(TTSState.STREAMING);
 
+        // Reset audio byte counter for new utterance
+        session.currentUtteranceAudioBytes = 0;
+
         // Send audio.output.start event to client
         this.sendAudioOutputStart(sessionId);
       }
@@ -525,6 +618,9 @@ export class TTSService {
         cartesiaConfig.sampleRate, // 16000
         48000 // Browser playback rate
       );
+
+      // Accumulate audio bytes for duration calculation
+      session.currentUtteranceAudioBytes += resampledAudio.length;
 
       // Send audio chunk to client via WebSocket
       this.sendAudioChunk(sessionId, resampledAudio);
@@ -549,12 +645,27 @@ export class TTSService {
 
   /**
    * Handle synthesis complete from Cartesia
+   * Returns audio duration in milliseconds for playback delay
    */
-  private handleSynthesisComplete(session: TTSSession): void {
+  private handleSynthesisComplete(session: TTSSession): number {
     try {
       const sessionId = session.sessionId;
 
-      logger.info('TTS synthesis complete', { sessionId });
+      // Calculate audio playback duration from bytes
+      // Formula: duration (seconds) = (bytes / 2) / sampleRate
+      // 48kHz, 16-bit PCM: bytes/2 = samples, samples/48000 = seconds
+      const audioBytes = session.currentUtteranceAudioBytes;
+      const sampleRate = 48000; // Browser playback rate
+      const bytesPerSample = 2; // 16-bit PCM
+      const durationSeconds = (audioBytes / bytesPerSample) / sampleRate;
+      const durationMs = Math.round(durationSeconds * 1000);
+
+      logger.info('TTS synthesis complete', {
+        sessionId,
+        audioBytes,
+        durationMs,
+        durationSeconds: durationSeconds.toFixed(2),
+      });
 
       // Transition to COMPLETED state
       session.transitionTo(TTSState.COMPLETED);
@@ -572,11 +683,14 @@ export class TTSService {
       session.metrics.averageSynthesisTimeMs =
         (currentAvg * (count - 1) + synthesisDuration) / count;
       session.metrics.totalSynthesisTimeMs += synthesisDuration;
+
+      return durationMs;
     } catch (error) {
       logger.error('Error handling synthesis complete', {
         sessionId: session.sessionId,
         error,
       });
+      return 0; // Return 0 on error to prevent blocking
     }
   }
 

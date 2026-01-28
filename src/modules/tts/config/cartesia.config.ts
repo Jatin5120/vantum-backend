@@ -14,7 +14,11 @@ export const cartesiaConfig = {
 
   // Model configuration (hardcoded - production values)
   model: 'sonic-english',
-  voiceId: 'a0e99841-438c-4a64-b679-ae501e7d6091', // Conversational female voice
+
+  // Voice configuration - Curated voices for Vantum
+  // Kyle (male - default): c961b81c-a935-4c17-bfb3-ba2239de8c2f - Approachable Friend
+  // Tessa (female): 6ccbfb76-1fc6-48f7-b71d-91ac6298247b - Kind Companion
+  voiceId: 'c961b81c-a935-4c17-bfb3-ba2239de8c2f', // Kyle (male) - Default voice
 
   // Audio format (hardcoded - matches Vantum audio pipeline)
   sampleRate: 16000, // 16kHz - matches Deepgram STT sample rate

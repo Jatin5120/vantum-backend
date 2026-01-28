@@ -1,10 +1,12 @@
 /**
  * TTS Timeout Configuration
+ * P1-5 FIX: Added synthesisTimeoutMs for synthesis operation timeout
  */
 
 export const ttsTimeoutConfig = {
   // Synthesis timeouts
   synthesisTimeout: Number(process.env.TTS_SYNTHESIS_TIMEOUT_MS) || 5000, // 5s
+  synthesisTimeoutMs: Number(process.env.TTS_SYNTHESIS_TIMEOUT_MS) || 30000, // 30s for synthesis operation
 
   // Connection timeouts
   connectionTimeout: Number(process.env.TTS_CONNECTION_TIMEOUT_MS) || 5000, // 5s

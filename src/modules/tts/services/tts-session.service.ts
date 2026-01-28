@@ -30,8 +30,10 @@ export class TTSSession implements TTSSessionData {
   // Synthesis state
   ttsState: TTSState = TTSState.IDLE;
   currentUtteranceId: string | null = null;
+  currentUtteranceAudioBytes = 0; // Track total audio bytes for current utterance (for duration calculation)
   textBuffer = '';
   synthesisMutex = false; // P1-3: Initialize synthesis mutex
+  synthesisPromise: { resolve: (duration: number) => void; reject: (error: Error) => void } | null = null; // Promise callbacks for awaiting synthesis completion (resolve with audio duration)
 
   // Configuration
   config: TTSConfig;

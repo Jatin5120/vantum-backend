@@ -2,6 +2,7 @@
  * LLM Controller
  * Public API for LLM operations
  * Stateless controller following Handler + Service pattern
+ * P1-7 FIX: Added hasSession method for session existence check
  */
 
 import { logger } from '@/shared/utils';
@@ -91,6 +92,16 @@ export class LLMController {
       });
       // Don't throw - always try to cleanup
     }
+  }
+
+  /**
+   * P1-7 FIX: Check if LLM session exists
+   * Used by socket server to conditionally cleanup sessions
+   * @param sessionId - Session ID
+   * @returns True if session exists
+   */
+  hasSession(sessionId: string): boolean {
+    return llmService.hasSession(sessionId);
   }
 
   /**

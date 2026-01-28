@@ -129,7 +129,26 @@ export async function handleAudioStart(
           return;
         }
       } else {
-        logger.info('STT session already ready', { sessionId: session.sessionId });
+        // Session exists, but ensure Deepgram connection is ready
+        // (may have been closed during previous finalization)
+        logger.info('STT session exists, ensuring connection ready', { sessionId: session.sessionId });
+        try {
+          await sttController.ensureConnectionReady(session.sessionId);
+        } catch (error) {
+          logger.error('Failed to ensure STT connection ready', {
+            sessionId: session.sessionId,
+            error
+          });
+          sendError(
+            ws,
+            ErrorCode.INTERNAL_ERROR,
+            'Failed to reconnect transcription service',
+            VOICECHAT_EVENTS.AUDIO_START,
+            session.sessionId,
+            data.eventId
+          );
+          return;
+        }
       }
     }
 
