@@ -32,17 +32,20 @@ This document specifies the **single unified EVENTS object** that replaces the l
 ### Design Principles
 
 **Single Unified Entity** (ADR-013):
+
 - ALL events in ONE `EVENTS` object
 - Hierarchical structure: `domain.category.action`
 - Type-safe with TypeScript `as const`
 - Discoverable via IDE autocomplete
 
 **Scalability**:
+
 - Supports 100+ event types without confusion
 - Easy to add new domains/categories
 - Clear organization and navigation
 
 **Standards-Compliant**:
+
 - Follows CloudEvents naming patterns
 - Industry-standard hierarchical structure
 - Compatible with event-driven architectures
@@ -88,6 +91,7 @@ EVENTS.{domain}.{category}.{ACTION}
 ```
 
 **Examples**:
+
 - `EVENTS.connection.lifecycle.ack` → `"connection.lifecycle.ack"`
 - `EVENTS.audio.input.start` → `"audio.input.start"`
 - `EVENTS.transcript.final.result` → `"transcript.final.result"`
@@ -95,35 +99,39 @@ EVENTS.{domain}.{category}.{ACTION}
 
 ### Domain Definitions
 
-| Domain | Purpose | Example Events |
-|--------|---------|----------------|
-| **connection** | WebSocket connection lifecycle | ack, heartbeat, disconnect |
-| **audio** | Audio streaming (input/output) | chunk, start, stop |
-| **transcript** | STT transcription results | interim, final |
-| **conversation** | LLM conversation management | state changed, response token |
-| **user** | User-initiated actions | interrupt, end call, mute |
-| **system** | System status and notifications | ready, maintenance, rate limit |
-| **error** | Error reporting | STT failed, LLM timeout |
+| Domain           | Purpose                         | Example Events                 |
+| ---------------- | ------------------------------- | ------------------------------ |
+| **connection**   | WebSocket connection lifecycle  | ack, heartbeat, disconnect     |
+| **audio**        | Audio streaming (input/output)  | chunk, start, stop             |
+| **transcript**   | STT transcription results       | interim, final                 |
+| **conversation** | LLM conversation management     | state changed, response token  |
+| **user**         | User-initiated actions          | interrupt, end call, mute      |
+| **system**       | System status and notifications | ready, maintenance, rate limit |
+| **error**        | Error reporting                 | STT failed, LLM timeout        |
 
 ### Category Definitions
 
 **Examples by Domain**:
 
 **connection**:
+
 - `lifecycle`: Connection state changes (ack, disconnect)
 - `error`: Connection errors (timeout, auth failed)
 
 **audio**:
+
 - `input`: Client-to-server audio (start, chunk, stop)
 - `output`: Server-to-client audio (chunk, complete)
 - `error`: Audio processing errors (invalid format)
 
 **transcript**:
+
 - `interim`: Partial transcripts (real-time)
 - `final`: Complete transcripts (utterance ended)
 - `error`: Transcription errors (low confidence)
 
 **conversation**:
+
 - `state`: Conversation state changes (LISTENING → THINKING)
 - `response`: LLM response streaming (token, complete)
 - `error`: Conversation errors (LLM timeout)
@@ -137,18 +145,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### connection.lifecycle
 
 **connection.lifecycle.ack**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: Acknowledges successful WebSocket connection, provides server-generated sessionId
 - **Payload**: `{ success: boolean, sessionId: string }`
 
 **connection.lifecycle.heartbeat**
+
 - **Direction**: Bidirectional
 - **Priority**: High
 - **Description**: Keep-alive ping to detect connection health
 - **Payload**: `{ timestamp: number }`
 
 **connection.lifecycle.disconnect**
+
 - **Direction**: Bidirectional
 - **Priority**: High
 - **Description**: Graceful connection termination
@@ -157,18 +168,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### connection.error
 
 **connection.error.general**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Generic connection error
 - **Payload**: `ErrorPayload`
 
 **connection.error.timeout**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Connection timeout (no heartbeat)
 - **Payload**: `ErrorPayload`
 
 **connection.error.auth_failed**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: Authentication failure
@@ -181,18 +195,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### audio.input (Client → Server)
 
 **audio.input.start**
+
 - **Direction**: Client → Server
 - **Priority**: High
 - **Description**: Client begins audio capture
-- **Payload**: `{ samplingRate: number, language?: string }`
+- **Payload**: `{ samplingRate: number, language?: string, voiceId?: string }`
 
 **audio.input.chunk**
+
 - **Direction**: Client → Server
 - **Priority**: Normal
 - **Description**: Audio data chunk (PCM 16-bit)
 - **Payload**: `{ audio: Buffer, timestamp: number }`
 
 **audio.input.stop**
+
 - **Direction**: Client → Server
 - **Priority**: High
 - **Description**: Client stops audio capture
@@ -201,24 +218,28 @@ EVENTS.{domain}.{category}.{ACTION}
 #### audio.output (Server → Client)
 
 **audio.output.start**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Server begins audio playback
 - **Payload**: `{ samplingRate: number }`
 
 **audio.output.chunk**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: Audio data chunk for playback
 - **Payload**: `{ audio: Buffer, timestamp: number }`
 
 **audio.output.complete**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: Audio playback complete
 - **Payload**: `{ duration: number }`
 
 **audio.output.cancel**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Cancel current audio playback (interruption)
@@ -227,18 +248,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### audio.error
 
 **audio.error.invalid_format**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Unsupported audio format
 - **Payload**: `ErrorPayload`
 
 **audio.error.unsupported_rate**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Unsupported sampling rate
 - **Payload**: `ErrorPayload`
 
 **audio.error.buffer_overflow**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Audio buffer full (backpressure)
@@ -251,6 +275,7 @@ EVENTS.{domain}.{category}.{ACTION}
 #### transcript.interim
 
 **transcript.interim.result**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: Partial transcript (real-time, updates continuously)
@@ -259,6 +284,7 @@ EVENTS.{domain}.{category}.{ACTION}
 #### transcript.final
 
 **transcript.final.result**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Complete transcript (utterance ended)
@@ -267,12 +293,14 @@ EVENTS.{domain}.{category}.{ACTION}
 #### transcript.error
 
 **transcript.error.low_confidence**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: Transcript confidence below threshold
 - **Payload**: `ErrorPayload & { confidence: number }`
 
 **transcript.error.stt_failed**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: STT service failure
@@ -285,12 +313,14 @@ EVENTS.{domain}.{category}.{ACTION}
 #### conversation.state
 
 **conversation.state.changed**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Conversation state transition
 - **Payload**: `{ from: ConversationState, to: ConversationState, timestamp: number }`
 
 **conversation.state.interrupted**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: User interrupted during RESPONDING state
@@ -299,18 +329,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### conversation.response
 
 **conversation.response.start**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: LLM response generation started
 - **Payload**: `{ timestamp: number }`
 
 **conversation.response.token**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: LLM token streamed (real-time response)
 - **Payload**: `{ token: string, index: number }`
 
 **conversation.response.complete**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: LLM response generation complete
@@ -319,18 +352,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### conversation.error
 
 **conversation.error.llm_timeout**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: LLM request timeout
 - **Payload**: `ErrorPayload`
 
 **conversation.error.llm_failed**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: LLM service failure
 - **Payload**: `ErrorPayload`
 
 **conversation.error.context_too_long**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Conversation history exceeds token limit
@@ -343,24 +379,28 @@ EVENTS.{domain}.{category}.{ACTION}
 #### user.action
 
 **user.action.interrupt**
+
 - **Direction**: Client → Server
 - **Priority**: High
 - **Description**: User explicitly interrupts AI response
 - **Payload**: `{ timestamp: number }`
 
 **user.action.end_call**
+
 - **Direction**: Client → Server
 - **Priority**: Critical
 - **Description**: User ends call
 - **Payload**: `{ reason?: string }`
 
 **user.action.mute**
+
 - **Direction**: Client → Server
 - **Priority**: Normal
 - **Description**: User mutes microphone
 - **Payload**: `{ timestamp: number }`
 
 **user.action.unmute**
+
 - **Direction**: Client → Server
 - **Priority**: Normal
 - **Description**: User unmutes microphone
@@ -369,6 +409,7 @@ EVENTS.{domain}.{category}.{ACTION}
 #### user.feedback
 
 **user.feedback.sentiment**
+
 - **Direction**: Client → Server
 - **Priority**: Low
 - **Description**: User sentiment during call (future feature)
@@ -381,18 +422,21 @@ EVENTS.{domain}.{category}.{ACTION}
 #### system.status
 
 **system.status.ready**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: System ready to accept calls
 - **Payload**: `{ timestamp: number }`
 
 **system.status.busy**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: System at capacity
 - **Payload**: `{ activeSessions: number, maxSessions: number }`
 
 **system.status.maintenance**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: System entering maintenance mode
@@ -401,12 +445,14 @@ EVENTS.{domain}.{category}.{ACTION}
 #### system.notification
 
 **system.notification.rate_limit_warning**
+
 - **Direction**: Server → Client
 - **Priority**: Normal
 - **Description**: Approaching API rate limit
 - **Payload**: `{ service: string, remainingQuota: number }`
 
 **system.notification.quota_exceeded**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: API quota exceeded
@@ -419,12 +465,14 @@ EVENTS.{domain}.{category}.{ACTION}
 #### error.general
 
 **error.general.unknown**
+
 - **Direction**: Server → Client
 - **Priority**: High
 - **Description**: Unknown error occurred
 - **Payload**: `ErrorPayload`
 
 **error.general.internal_server_error**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: Internal server error
@@ -433,24 +481,28 @@ EVENTS.{domain}.{category}.{ACTION}
 #### error.service
 
 **error.service.stt_unavailable**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: Deepgram STT service unavailable
 - **Payload**: `ErrorPayload`
 
 **error.service.llm_unavailable**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: OpenAI LLM service unavailable
 - **Payload**: `ErrorPayload`
 
 **error.service.tts_unavailable**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: Cartesia TTS service unavailable
 - **Payload**: `ErrorPayload`
 
 **error.service.telephony_unavailable**
+
 - **Direction**: Server → Client
 - **Priority**: Critical
 - **Description**: Twilio telephony service unavailable
@@ -478,14 +530,14 @@ export const EVENT_METADATA: Record<string, EventMetadata> = {
     priority: 'critical',
     description: 'Acknowledges successful connection with sessionId',
     payloadType: 'ConnectionAckPayload',
-    version: '1.0.0'
+    version: '1.0.0',
   },
   'audio.input.chunk': {
     direction: 'client-to-server',
     priority: 'normal',
     description: 'Audio data chunk from client',
     payloadType: 'AudioChunkPayload',
-    version: '1.0.0'
+    version: '1.0.0',
   },
   // ... (all ~50 events)
 };
@@ -496,8 +548,8 @@ export const EVENT_METADATA: Record<string, EventMetadata> = {
 ```typescript
 // Get event metadata
 const metadata = EVENT_METADATA[EVENTS.audio.input.start];
-console.log(metadata.direction);  // 'client-to-server'
-console.log(metadata.priority);   // 'high'
+console.log(metadata.direction); // 'client-to-server'
+console.log(metadata.priority); // 'high'
 ```
 
 ---
@@ -584,9 +636,7 @@ export function isCriticalEvent(eventType: string): boolean {
  * Get all events for a specific domain
  */
 export function getEventsForDomain(domain: string): string[] {
-  return Object.keys(EVENT_METADATA).filter(
-    eventType => getEventDomain(eventType) === domain
-  );
+  return Object.keys(EVENT_METADATA).filter((eventType) => getEventDomain(eventType) === domain);
 }
 
 /**
@@ -726,23 +776,23 @@ export type EventType = typeof EVENTS;
 ```typescript
 // Extract all possible event type strings
 export type EventTypeString =
-  | typeof EVENTS.connection.lifecycle[keyof typeof EVENTS.connection.lifecycle]
-  | typeof EVENTS.connection.error[keyof typeof EVENTS.connection.error]
-  | typeof EVENTS.audio.input[keyof typeof EVENTS.audio.input]
-  | typeof EVENTS.audio.output[keyof typeof EVENTS.audio.output]
-  | typeof EVENTS.audio.error[keyof typeof EVENTS.audio.error]
-  | typeof EVENTS.transcript.interim[keyof typeof EVENTS.transcript.interim]
-  | typeof EVENTS.transcript.final[keyof typeof EVENTS.transcript.final]
-  | typeof EVENTS.transcript.error[keyof typeof EVENTS.transcript.error]
-  | typeof EVENTS.conversation.state[keyof typeof EVENTS.conversation.state]
-  | typeof EVENTS.conversation.response[keyof typeof EVENTS.conversation.response]
-  | typeof EVENTS.conversation.error[keyof typeof EVENTS.conversation.error]
-  | typeof EVENTS.user.action[keyof typeof EVENTS.user.action]
-  | typeof EVENTS.user.feedback[keyof typeof EVENTS.user.feedback]
-  | typeof EVENTS.system.status[keyof typeof EVENTS.system.status]
-  | typeof EVENTS.system.notification[keyof typeof EVENTS.system.notification]
-  | typeof EVENTS.error.general[keyof typeof EVENTS.error.general]
-  | typeof EVENTS.error.service[keyof typeof EVENTS.error.service];
+  | (typeof EVENTS.connection.lifecycle)[keyof typeof EVENTS.connection.lifecycle]
+  | (typeof EVENTS.connection.error)[keyof typeof EVENTS.connection.error]
+  | (typeof EVENTS.audio.input)[keyof typeof EVENTS.audio.input]
+  | (typeof EVENTS.audio.output)[keyof typeof EVENTS.audio.output]
+  | (typeof EVENTS.audio.error)[keyof typeof EVENTS.audio.error]
+  | (typeof EVENTS.transcript.interim)[keyof typeof EVENTS.transcript.interim]
+  | (typeof EVENTS.transcript.final)[keyof typeof EVENTS.transcript.final]
+  | (typeof EVENTS.transcript.error)[keyof typeof EVENTS.transcript.error]
+  | (typeof EVENTS.conversation.state)[keyof typeof EVENTS.conversation.state]
+  | (typeof EVENTS.conversation.response)[keyof typeof EVENTS.conversation.response]
+  | (typeof EVENTS.conversation.error)[keyof typeof EVENTS.conversation.error]
+  | (typeof EVENTS.user.action)[keyof typeof EVENTS.user.action]
+  | (typeof EVENTS.user.feedback)[keyof typeof EVENTS.user.feedback]
+  | (typeof EVENTS.system.status)[keyof typeof EVENTS.system.status]
+  | (typeof EVENTS.system.notification)[keyof typeof EVENTS.system.notification]
+  | (typeof EVENTS.error.general)[keyof typeof EVENTS.error.general]
+  | (typeof EVENTS.error.service)[keyof typeof EVENTS.error.service];
 
 // Use in event message
 interface EventMessage {
@@ -761,6 +811,7 @@ interface EventMessage {
 ### From Legacy VOICECHAT_EVENTS
 
 **Legacy Structure** (DEPRECATED):
+
 ```typescript
 export const VOICECHAT_EVENTS = {
   CONNECTION_ESTABLISHED: 'voicechat.connection.established',
@@ -771,6 +822,7 @@ export const VOICECHAT_EVENTS = {
 ```
 
 **New Structure** (CURRENT):
+
 ```typescript
 export const EVENTS = {
   connection: {
@@ -788,11 +840,13 @@ export const EVENTS = {
 ### Migration Steps
 
 **Step 1: Install Updated vantum-shared**
+
 ```bash
 pnpm add @Jatin5120/vantum-shared@latest
 ```
 
 **Step 2: Update Imports**
+
 ```typescript
 // Before
 import { VOICECHAT_EVENTS } from '@Jatin5120/vantum-shared';
@@ -802,12 +856,15 @@ import { EVENTS } from '@Jatin5120/vantum-shared';
 ```
 
 **Step 3: Update Event References**
+
 ```typescript
 // Before
-if (message.eventType === VOICECHAT_EVENTS.AUDIO_CHUNK) { }
+if (message.eventType === VOICECHAT_EVENTS.AUDIO_CHUNK) {
+}
 
 // After
-if (message.eventType === EVENTS.audio.input.chunk) { }
+if (message.eventType === EVENTS.audio.input.chunk) {
+}
 ```
 
 ### Backward Compatibility (Temporary)
@@ -845,7 +902,7 @@ sendMessage(ws, {
   eventId: uuidv7(),
   sessionId: sessionId,
   payload: { success: true },
-  timestamp: Date.now()
+  timestamp: Date.now(),
 });
 
 // Send audio output
@@ -854,7 +911,7 @@ sendMessage(ws, {
   eventId: uuidv7(),
   sessionId: sessionId,
   payload: { audio: audioBuffer },
-  timestamp: Date.now()
+  timestamp: Date.now(),
 });
 ```
 
@@ -918,19 +975,19 @@ import { EVENTS } from '@Jatin5120/vantum-shared';
 // Start audio input
 socketManager.send({
   eventType: EVENTS.audio.input.start,
-  payload: { samplingRate: 48000, language: 'en-US' }
+  payload: { samplingRate: 48000, language: 'en-US' },
 });
 
 // Send audio chunk
 socketManager.send({
   eventType: EVENTS.audio.input.chunk,
-  payload: { audio: audioBuffer }
+  payload: { audio: audioBuffer },
 });
 
 // User interrupts
 socketManager.send({
   eventType: EVENTS.user.action.interrupt,
-  payload: { timestamp: Date.now() }
+  payload: { timestamp: Date.now() },
 });
 ```
 

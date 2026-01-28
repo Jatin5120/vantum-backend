@@ -1,7 +1,7 @@
 # WebSocket Protocol Specification
 
-**Version**: 1.4.0
-**Last Updated**: 2026-01-04
+**Version**: 1.5.0
+**Last Updated**: 2026-01-26
 **Status**: Single Source of Truth
 
 This document defines the complete WebSocket protocol specification for the Vantum backend. All implementations must follow these specifications exactly.
@@ -41,7 +41,8 @@ This document defines the complete WebSocket protocol specification for the Vant
 6. [Event Types](#event-types)
 7. [Message Flow Examples](#message-flow-examples)
 8. [Complete Examples](#complete-examples)
-9. [Implementation Notes](#implementation-notes)
+9. [Semantic Streaming](#semantic-streaming) ⭐ **NEW**
+10. [Implementation Notes](#implementation-notes)
 
 ---
 
@@ -135,6 +136,7 @@ interface BaseMessage {
 ### Common Mistakes:
 
 ❌ **WRONG**: Client generates sessionId before connecting
+
 ```typescript
 // DON'T DO THIS
 const sessionId = generateUUID(); // Client-generated
@@ -142,6 +144,7 @@ connect(sessionId); // This won't work with server-generated IDs
 ```
 
 ✅ **CORRECT**: Client waits for server's sessionId
+
 ```typescript
 // DO THIS
 ws.on('message', (data) => {
@@ -177,7 +180,8 @@ Request messages are sent by the client to initiate actions or send data.
   sessionId: "fedcba98-7654-3210-fedc-ba9876543210",  // From connection.ack
   payload: {
     samplingRate: 48000,
-    language: "en-US"
+    language: "en-US",
+    voiceId: "c961b81c-a935-4c17-bfb3-ba2239de8c2f"  // Optional: TTS voice ID (Kyle - male)
   }
 }
 ```
@@ -478,13 +482,13 @@ Connection ACK is sent automatically by the server when a WebSocket connection i
 
 ## Field Requirements
 
-| Field         | Request                  | ACK Response           | Regular Response   | Error Response           | Connection ACK              |
-| ------------- | ------------------------ | ---------------------- | ------------------ | ------------------------ | --------------------------- |
+| Field         | Request                  | ACK Response           | Regular Response   | Error Response           | Connection ACK                  |
+| ------------- | ------------------------ | ---------------------- | ------------------ | ------------------------ | ------------------------------- |
 | `eventType`   | ✅ Required              | ✅ Same as request     | ✅ Response type   | ✅ Converted error type  | ✅ `"connection.lifecycle.ack"` |
-| `eventId`     | ✅ Required (new UUIDv7) | ✅ Same as request     | ✅ Same as request | ✅ Same as request       | ✅ New UUIDv7               |
-| `sessionId`   | ✅ Required (from ACK)   | ✅ Same as request     | ✅ Same as request | ✅ Same as request       | ✅ **Server-generated** ⭐  |
-| `requestType` | ❌                       | ❌                     | ❌                 | ✅ Required (top level)  | ❌                          |
-| `payload`     | ✅ Required              | ✅ `{ success: true }` | ✅ Response data   | ✅ `{ message: string }` | ✅ `{ success: true }`      |
+| `eventId`     | ✅ Required (new UUIDv7) | ✅ Same as request     | ✅ Same as request | ✅ Same as request       | ✅ New UUIDv7                   |
+| `sessionId`   | ✅ Required (from ACK)   | ✅ Same as request     | ✅ Same as request | ✅ Same as request       | ✅ **Server-generated** ⭐      |
+| `requestType` | ❌                       | ❌                     | ❌                 | ✅ Required (top level)  | ❌                              |
+| `payload`     | ✅ Required              | ✅ `{ success: true }` | ✅ Response data   | ✅ `{ message: string }` | ✅ `{ success: true }`          |
 
 ---
 
@@ -512,23 +516,28 @@ This section lists all event types. For detailed specifications, see the [Messag
 ### Server → Client Events
 
 #### Connection Events
+
 - `connection.lifecycle.ack` - Connection acknowledgment with server-generated sessionId (see [Connection ACK](#5-connection-ack-special-case))
 
 #### STT Events (Deepgram)
+
 - `transcript.interim` - Interim transcript (partial, may change)
 - `transcript.final` - Final transcript (complete, won't change)
 
 #### TTS Events (Cartesia)
+
 - `audio.output.start` - TTS synthesis started (RESPONSE_START) (see [Regular Response Messages](#3-regular-response-messages-server--client))
 - `audio.output.chunk` - TTS audio chunk (RESPONSE_CHUNK) (see [Response Chunks](#response-chunks-special-format))
 - `audio.output.complete` - TTS synthesis complete (RESPONSE_COMPLETE) (see [Regular Response Messages](#3-regular-response-messages-server--client))
 - `audio.output.cancel` - User interrupted AI / stop response (see [Regular Response Messages](#3-regular-response-messages-server--client))
 
 #### Conversation Events (Future LLM Integration)
+
 - `conversation.response.start` - AI about to respond (see [Regular Response Messages](#3-regular-response-messages-server--client))
 - `conversation.response.complete` - AI response complete (see [Regular Response Messages](#3-regular-response-messages-server--client))
 
 #### Error Events
+
 - `audio.error.*` - Error for audio events (see [Error Response Messages](#4-error-response-messages-server--client))
 - `tts.error.*` - Error for TTS events (see [Error Response Messages](#4-error-response-messages-server--client))
   - `tts.error.connection` - TTS WebSocket connection failed
@@ -590,6 +599,68 @@ sequenceDiagram
     Server->>Client: audio.output.complete<br/>(utteranceId: utt-abc)
     Note over Client: User hears ONLY Cartesia voice<br/>"Hello, how are you?"<br/>(NO echo of original audio)
 ```
+
+### Multiple Recording Cycles (Session Reuse) ⭐ **NEW**
+
+```mermaid
+sequenceDiagram
+    participant Client
+    participant Server
+    participant STT as Deepgram STT
+
+    Note over Client,STT: First Recording Cycle
+    Client->>Server: audio.input.start<br/>(sessionId)
+    Note over Server: Create STT session + open connection
+    Server->>STT: Open WebSocket connection
+    Server->>Client: ACK
+    Client->>Server: audio.input.chunk × N
+    Server->>STT: Forward chunks
+
+    Client->>Server: audio.input.end
+    Note over Server: Finalize transcript
+    Server->>STT: CloseStream message
+    Note over STT: Connection CLOSED (readyState 3)
+    Server->>Client: ACK
+    Note over Server: Session persists, connection closed
+
+    Note over Client,STT: (AI responds via TTS, user waits)
+
+    Note over Client,STT: Second Recording Cycle
+    Client->>Server: audio.input.start<br/>(SAME sessionId)
+    Note over Server: Session exists, check connection state
+    Note over Server: Connection CLOSED → Reopen transparently
+    Server->>STT: Reopen WebSocket connection
+    Note over STT: Connection OPEN (readyState 1)
+    Server->>Client: ACK
+    Client->>Server: audio.input.chunk × N
+    Server->>STT: Forward chunks
+
+    Client->>Server: audio.input.end
+    Server->>STT: CloseStream message
+    Note over STT: Connection CLOSED again
+    Server->>Client: ACK
+
+    Note over Client,STT: Third, Fourth, ... Cycles (same pattern)
+
+    Note over Client,STT: Session Cleanup
+    Client->>Server: WebSocket disconnect
+    Note over Server: Clean up STT session completely
+    Note over Server: Session destroyed
+```
+
+**Key Points:**
+
+- **Session persists** across multiple recording cycles
+- **Connection closes** after each `audio.input.end` (expected Deepgram behavior)
+- **Connection reopens** automatically on next `audio.input.start` (transparent to client)
+- **Session destroyed** only on WebSocket disconnect
+
+**Implementation Details:**
+
+- `audio.input.start` (first time) → `createSession()` → Opens new connection
+- `audio.input.end` → `finalizeTranscript()` → Closes connection, keeps session
+- `audio.input.start` (subsequent) → `ensureConnectionReady()` → Reopens connection if closed
+- WebSocket disconnect → `endSession()` → Destroys session completely
 
 ### Standard Message Flow
 
@@ -786,6 +857,7 @@ sequenceDiagram
 **Result**: User hears ONLY Cartesia's voice saying "Hello, how are you?" (NO echo of original audio)
 
 **MVP Behavior**:
+
 - TTS triggers on **manual "Stop recording" button** (audio.input.end)
 - No automatic synthesis during recording
 - No audio echo (removed for cleaner pipeline)
@@ -909,6 +981,277 @@ sequenceDiagram
 
 ---
 
+## Semantic Streaming
+
+### Overview
+
+The LLM service implements **semantic streaming** to deliver AI responses in natural, meaningful chunks synchronized with Text-to-Speech (TTS) for optimal conversational flow.
+
+Semantic streaming ensures:
+
+- Natural pauses in speech output
+- No audio overlapping
+- Better user experience with progressive responses
+- Efficient bandwidth usage
+
+### How It Works
+
+#### 1. Marker-Based Chunking (Primary Strategy)
+
+The AI response includes explicit `||BREAK||` markers to indicate natural pause points:
+
+**Example**:
+
+```
+"Hello! ||BREAK|| I can help you with that. ||BREAK|| Let me explain how it works."
+```
+
+This response is split into 3 semantic chunks:
+
+1. `"Hello!"`
+2. `"I can help you with that."`
+3. `"Let me explain how it works."`
+
+**Benefits**:
+
+- AI controls natural pause points
+- Context-aware chunking
+- Better speech synthesis quality
+
+#### 2. Sentence-Based Fallback
+
+If the AI response contains no `||BREAK||` markers, the system falls back to sentence-based chunking using standard punctuation (`.`, `!`, `?`).
+
+**Example**:
+
+```
+"Hello! I can help you. Let me explain."
+```
+
+Splits into:
+
+1. `"Hello!"`
+2. `"I can help you."`
+3. `"Let me explain."`
+
+#### 3. Sequential TTS Delivery
+
+Each semantic chunk follows this pipeline:
+
+```
+1. Chunk extracted from LLM response
+2. Sent to TTS service for synthesis
+3. Audio generated (PCM 48kHz 16-bit)
+4. Audio duration calculated (milliseconds)
+5. Audio sent to client via AUDIO_CHUNK event
+6. Server waits for playback duration
+7. Next chunk begins (goto step 1)
+```
+
+**Key Feature**: Sequential delivery prevents audio overlapping and ensures natural conversation flow.
+
+### Configuration
+
+**Location**: `/vantum-backend/src/modules/llm/config/streaming.config.ts`
+
+**Parameters**:
+
+```typescript
+{
+  chunkSizeTarget: 150,           // Target characters per chunk
+  semanticMarker: '||BREAK||',    // Explicit break marker
+  maxBufferSize: 4096,            // Max bytes per chunk (overflow protection)
+  sentenceBoundaries: ['.', '!', '?'], // Fallback delimiters
+  minChunkSize: 10,               // Minimum viable chunk size
+}
+```
+
+### Buffer Management
+
+**Chunk Size Limits**:
+
+- **Target**: 150 characters (~30-50 tokens)
+- **Maximum**: 4KB (4096 bytes) per chunk
+- **Overflow protection**: Chunks exceeding 4KB are split
+
+**Encoding**: UTF-8 text → MessagePack binary protocol
+
+### Message Flow
+
+```
+┌─────────────┐
+│ User Speaks │
+└──────┬──────┘
+       ↓
+┌──────────────────┐
+│ STT (Deepgram)   │ Transcription
+└──────┬───────────┘
+       ↓
+┌──────────────────────────────────┐
+│ LLM (OpenAI GPT-4)               │ Response with ||BREAK|| markers
+│ "Hello! ||BREAK|| How are you?"  │
+└──────┬───────────────────────────┘
+       ↓
+┌──────────────────────────┐
+│ Streaming Service        │ Extract chunks:
+│                          │ 1. "Hello!"
+│                          │ 2. "How are you?"
+└──────┬───────────────────┘
+       ↓
+┌──────────────────────────┐
+│ For each chunk:          │
+│                          │
+│  ┌────────────────────┐  │
+│  │ TTS Synthesis      │  │ → Audio chunk (PCM)
+│  └────────┬───────────┘  │
+│           ↓              │
+│  ┌────────────────────┐  │
+│  │ Calculate Duration │  │ → 1250ms
+│  └────────┬───────────┘  │
+│           ↓              │
+│  ┌────────────────────┐  │
+│  │ Send AUDIO_CHUNK   │  │ → To client
+│  └────────┬───────────┘  │
+│           ↓              │
+│  ┌────────────────────┐  │
+│  │ Wait for Playback  │  │ → delay(1250ms)
+│  └────────────────────┘  │
+│           ↓              │
+│       Next chunk         │
+└──────────────────────────┘
+```
+
+### WebSocket Events
+
+**No New Events**: Semantic streaming is transparent to clients. The existing `AUDIO_CHUNK` event is used.
+
+**Event Details**:
+
+- **Event Type**: `VOICECHAT_EVENTS.AUDIO_CHUNK`
+- **Payload**: Standard audio chunk payload
+- **utteranceId**: Same for all chunks from a single LLM response
+- **Sequence**: Chunks arrive sequentially (not concurrently)
+
+**Example** (MessagePack encoded):
+
+```typescript
+{
+  eventType: 'AUDIO_CHUNK',
+  sessionId: 'session-123',
+  payload: {
+    audio: Buffer<Int16Array>,  // PCM 48kHz 16-bit
+    sampleRate: 48000,
+    format: 'pcm16',
+    utteranceId: 'utt-456',      // Same for all chunks
+    chunkSequence: 1             // Incremental
+  }
+}
+```
+
+### Client Behavior
+
+**No Changes Required**: Clients continue to:
+
+1. Receive `AUDIO_CHUNK` events
+2. Queue audio for playback
+3. Play sequentially
+
+**Benefits for Clients**:
+
+- Progressive audio arrival (lower latency)
+- Natural pauses between semantic chunks
+- Better perceived responsiveness
+
+### Performance Characteristics
+
+**Latency**:
+
+- **First chunk**: ~500-1000ms (STT + LLM + TTS)
+- **Subsequent chunks**: ~300-500ms (TTS only, LLM streams in parallel)
+- **Total response**: Perceived as faster due to progressive delivery
+
+**Throughput**:
+
+- ~3-5 chunks per LLM response (typical)
+- ~150 characters per chunk
+- ~1-2 seconds audio per chunk
+
+**Error Handling**:
+
+- Chunk failure: Skip to next chunk
+- TTS failure: Use fallback message
+- Network failure: Client resends transcript
+
+### Debugging
+
+**Enable Debug Logs**:
+
+```bash
+LOG_LEVEL=debug pnpm dev
+```
+
+**Key Log Messages**:
+
+```
+[DEBUG] Extracted semantic chunks { sessionId, chunkCount: 3 }
+[DEBUG] Processing chunk 1/3 { sessionId, text: "Hello!", chunkSize: 6 }
+[DEBUG] TTS audio duration: 1250ms { sessionId, chunkNumber: 1 }
+[DEBUG] Playback delay complete { sessionId, chunkNumber: 1, delayMs: 1250 }
+```
+
+**Metrics**:
+
+```typescript
+const metrics = llmStreamingService.getMetrics();
+// {
+//   totalChunks: 245,
+//   markerBasedChunks: 180,   // 73% used markers
+//   sentenceBasedChunks: 65,  // 27% fallback
+//   averageChunkSize: 142,    // characters
+// }
+```
+
+### Configuration Tuning
+
+**For Shorter Responses** (faster pace):
+
+```typescript
+chunkSizeTarget: 100; // Smaller chunks
+```
+
+**For Longer Responses** (fewer pauses):
+
+```typescript
+chunkSizeTarget: 200; // Larger chunks
+```
+
+**For Specific Pause Points**:
+
+- Adjust system prompt to guide AI on marker placement
+- Example: "Use ||BREAK|| after each key point"
+
+### Limitations
+
+**Known Limitations**:
+
+1. **Marker reliance**: AI may forget to use ||BREAK|| markers (fallback handles this)
+2. **Chunk overhead**: More chunks = more TTS API calls (mitigated by queuing)
+3. **Latency**: Sequential delivery slower than bulk (but perceived faster)
+
+**Future Improvements**:
+
+- Adaptive chunk sizing based on response length
+- Parallel TTS with sequenced playback
+- Client-side chunk assembly for bandwidth optimization
+
+### References
+
+- LLM Streaming Service: `/vantum-backend/src/modules/llm/services/llm-streaming.service.ts`
+- Configuration: `/vantum-backend/src/modules/llm/config/streaming.config.ts`
+- TTS Integration: `/vantum-backend/src/modules/tts/controllers/tts.controller.ts`
+
+---
+
 ## Implementation Notes
 
 1. **Session ID:** **Server-generated** (sent in `connection.ack`), always at top level, never in `payload`
@@ -923,7 +1266,11 @@ sequenceDiagram
 10. **TTS Events:** Follow same pattern as STT events (start → chunks → complete)
 11. **Audio Resampling:** All audio output is resampled to match client sample rate (48kHz for browser, 8kHz for Twilio)
 12. **Interruption Detection:** Frontend detects new response when utteranceId changes (see [Response Chunks](#response-chunks-special-format))
-13. **Future Enhancement:** Automatic VAD-based TTS trigger (see [MVP Audio Pipeline Documentation](../architecture/mvp-audio-pipeline.md))
+13. **Multiple Recording Cycles:** Sessions persist across multiple recording cycles; Deepgram connections close after finalization and reopen transparently on next `audio.input.start` ⭐ **NEW**
+14. **Connection Lifecycle:** `finalizeTranscript()` closes connection but keeps session; `ensureConnectionReady()` reopens connection; `endSession()` destroys session on disconnect ⭐ **NEW**
+15. **Transparent Reconnection:** Client doesn't need to know about connection state; server handles reopening automatically ⭐ **NEW**
+16. **Future Enhancement:** Automatic VAD-based TTS trigger (see [MVP Audio Pipeline Documentation](../architecture/mvp-audio-pipeline.md))
+17. **Semantic Streaming:** LLM responses use ||BREAK|| markers for natural chunking; fallback to sentence boundaries if no markers (see [Semantic Streaming](#semantic-streaming)) ⭐ **NEW**
 
 ---
 

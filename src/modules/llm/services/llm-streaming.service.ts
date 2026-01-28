@@ -16,6 +16,7 @@ import { logger } from '@/shared/utils';
 import { ttsController } from '@/modules/tts';
 import { streamingConfig } from '../config/streaming.config';
 import { SemanticChunk, ChunkingResult, StreamingMetrics } from '../types';
+import { sessionService } from '@/modules/socket/services';
 
 /**
  * LLM Streaming Service
@@ -271,8 +272,8 @@ export class LLMStreamingServiceClass {
   }
 
   /**
-   * Send single chunk to TTS (sequential delivery)
-   * Awaits TTS completion before returning
+   * Send single chunk to TTS (sequential delivery with playback delay)
+   * Awaits TTS transmission completion, then waits for audio playback to complete
    *
    * @param sessionId - Session ID
    * @param chunk - Semantic chunk to send
@@ -290,17 +291,35 @@ export class LLMStreamingServiceClass {
           (chunk.text.length > streamingConfig.logPreviewLength ? '...' : ''),
       });
 
-      // Sequential delivery: await TTS completion
-      await ttsController.synthesize(sessionId, chunk.text);
+      // Get voiceId from session metadata (if set by audio.start)
+      const session = sessionService.getSessionBySessionId(sessionId);
+      const voiceId = session?.metadata?.voiceId as string | undefined;
+
+      // Sequential delivery: await TTS transmission completion and get audio duration
+      const audioDurationMs = await ttsController.synthesize(sessionId, chunk.text, {
+        voiceId,
+      });
 
       // Track chunk size for metrics
       this.chunkSizes.push(chunk.charCount);
 
-      logger.info('Chunk TTS complete', {
+      logger.info('Chunk TTS transmission complete, waiting for playback', {
         sessionId,
         chunkNumber: chunk.chunkNumber,
         charCount: chunk.charCount,
+        audioDurationMs,
       });
+
+      // Wait for audio playback to complete before sending next chunk
+      // This prevents overlapping audio when there's no frontend queueing
+      if (audioDurationMs > 0) {
+        await new Promise((resolve) => setTimeout(resolve, audioDurationMs));
+        logger.debug('Playback delay complete', {
+          sessionId,
+          chunkNumber: chunk.chunkNumber,
+          delayMs: audioDurationMs,
+        });
+      }
 
       this.totalChunksStreamed++;
     } catch (error) {

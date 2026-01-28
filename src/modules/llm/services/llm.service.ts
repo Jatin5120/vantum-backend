@@ -20,6 +20,7 @@ import { llmSessionService } from './llm-session.service';
 import { llmStreamingService } from './llm-streaming.service';
 import { openaiConfig, llmRetryConfig } from '../config';
 import { LLMServiceMetrics, QueuedRequest } from '../types';
+import { sessionService } from '@/modules/socket/services';
 
 export class LLMServiceClass {
   private openai: OpenAI;
@@ -184,9 +185,11 @@ export class LLMServiceClass {
       // Add fallback to context (maintains conversation coherence)
       llmSessionService.addAssistantMessage(sessionId, fallback);
 
-      // Send fallback to TTS
+      // Send fallback to TTS with voiceId from session metadata
+      const session = sessionService.getSessionBySessionId(sessionId);
+      const voiceId = session?.metadata?.voiceId as string | undefined;
       const { ttsController } = await import('@/modules/tts');
-      await ttsController.synthesize(sessionId, fallback);
+      await ttsController.synthesize(sessionId, fallback, { voiceId });
 
       return fallback;
     } finally {
@@ -365,7 +368,30 @@ export class LLMServiceClass {
       activeSessions: llmSessionService.getSessionCount(),
     });
 
-    llmSessionService.cleanup();
+    // P0-1 FIX: Reject all queued requests before clearing
+    // P2-1 FIX: Defensive try-catch prevents one bad rejection from blocking others
+    this.requestQueues.forEach((queue, sessionId) => {
+      queue.forEach((req) => {
+        try {
+          req.reject(new Error('Service shutting down'));
+          logger.debug('Rejected queued request during shutdown', { sessionId });
+        } catch (error) {
+          // Defensive: Ignore rejection errors, continue cleanup
+          logger.debug('Error rejecting queued request (continuing)', { sessionId, error });
+        }
+      });
+    });
+
+    // P2-1 COMPLETION: Defensive try-catch around session cleanup
+    try {
+      llmSessionService.cleanup();
+      logger.debug('LLM session service cleanup completed');
+    } catch (error) {
+      // Defensive: Log error but continue shutdown
+      logger.error('LLM session cleanup failed during shutdown (continuing)', {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
 
     // Clear all state
     this.failureCounts.clear();
