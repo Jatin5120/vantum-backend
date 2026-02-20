@@ -506,48 +506,46 @@ Connection ACK is sent automatically by the server when a WebSocket connection i
 
 This section lists all event types. For detailed specifications, see the [Message Types](#message-types) section above.
 
+> **Implementation Note**: Event type strings are defined in `@Jatin5120/vantum-shared` as `VOICECHAT_EVENTS` constants. The actual wire-format strings use the `voicechat.*` namespace prefix. Use the constants (not string literals) in all code.
+
 ### Client → Server Events
 
-- `audio.input.start` - Initialize voice session (see [Request Messages](#1-request-messages-client--server))
-- `audio.input.chunk` - Stream audio chunk (see [Request Messages](#1-request-messages-client--server))
-- `audio.input.end` - End voice session (see [Request Messages](#1-request-messages-client--server))
-  - **MVP**: Triggers TTS synthesis with accumulated transcript
+| Constant                       | Wire Value              | Description                                           |
+| ------------------------------ | ----------------------- | ----------------------------------------------------- |
+| `VOICECHAT_EVENTS.AUDIO_START` | `voicechat.audio.start` | Initialize voice session                              |
+| `VOICECHAT_EVENTS.AUDIO_CHUNK` | `voicechat.audio.chunk` | Stream audio chunk                                    |
+| `VOICECHAT_EVENTS.AUDIO_END`   | `voicechat.audio.end`   | End voice session — triggers STT → LLM → TTS pipeline |
 
 ### Server → Client Events
 
 #### Connection Events
 
-- `connection.lifecycle.ack` - Connection acknowledgment with server-generated sessionId (see [Connection ACK](#5-connection-ack-special-case))
+| Constant                          | Wire Value       | Description                                               |
+| --------------------------------- | ---------------- | --------------------------------------------------------- |
+| `VOICECHAT_EVENTS.CONNECTION_ACK` | `connection.ack` | Connection acknowledgment with server-generated sessionId |
 
 #### STT Events (Deepgram)
 
 - `transcript.interim` - Interim transcript (partial, may change)
 - `transcript.final` - Final transcript (complete, won't change)
 
-#### TTS Events (Cartesia)
+#### TTS / Response Events (Cartesia + LLM)
 
-- `audio.output.start` - TTS synthesis started (RESPONSE_START) (see [Regular Response Messages](#3-regular-response-messages-server--client))
-- `audio.output.chunk` - TTS audio chunk (RESPONSE_CHUNK) (see [Response Chunks](#response-chunks-special-format))
-- `audio.output.complete` - TTS synthesis complete (RESPONSE_COMPLETE) (see [Regular Response Messages](#3-regular-response-messages-server--client))
-- `audio.output.cancel` - User interrupted AI / stop response (see [Regular Response Messages](#3-regular-response-messages-server--client))
-
-#### Conversation Events (Future LLM Integration)
-
-- `conversation.response.start` - AI about to respond (see [Regular Response Messages](#3-regular-response-messages-server--client))
-- `conversation.response.complete` - AI response complete (see [Regular Response Messages](#3-regular-response-messages-server--client))
+| Constant                              | Wire Value                     | Description                                |
+| ------------------------------------- | ------------------------------ | ------------------------------------------ |
+| `VOICECHAT_EVENTS.RESPONSE_START`     | `voicechat.response.start`     | TTS synthesis started for a semantic chunk |
+| `VOICECHAT_EVENTS.RESPONSE_CHUNK`     | `voicechat.response.chunk`     | TTS audio chunk (48kHz PCM)                |
+| `VOICECHAT_EVENTS.RESPONSE_COMPLETE`  | `voicechat.response.complete`  | All chunks for this utterance delivered    |
+| `VOICECHAT_EVENTS.RESPONSE_STOP`      | `voicechat.response.stop`      | Stop current playback                      |
+| `VOICECHAT_EVENTS.RESPONSE_INTERRUPT` | `voicechat.response.interrupt` | User interrupted AI response (cancel TTS)  |
 
 #### Error Events
 
-- `audio.error.*` - Error for audio events (see [Error Response Messages](#4-error-response-messages-server--client))
-- `tts.error.*` - Error for TTS events (see [Error Response Messages](#4-error-response-messages-server--client))
-  - `tts.error.connection` - TTS WebSocket connection failed
-  - `tts.error.synthesis` - TTS audio generation failed
-  - `tts.error.timeout` - TTS request timed out
-  - `tts.error.general` - Generic TTS error
-- `conversation.error.*` - Error for conversation events (see [Error Response Messages](#4-error-response-messages-server--client))
-- `error.system.unknown` - Generic error for malformed messages (see [Error Response Messages](#4-error-response-messages-server--client))
+| Constant                 | Wire Value        | Description                                        |
+| ------------------------ | ----------------- | -------------------------------------------------- |
+| `VOICECHAT_EVENTS.ERROR` | `voicechat.error` | Generic error with `code` and `message` in payload |
 
-**Note:** Event types use the new hierarchical naming (domain.category.action). See [Event System Architecture](./event-system.md) for complete reference.
+**Note:** Always import and use the `VOICECHAT_EVENTS` constants from `@Jatin5120/vantum-shared` rather than hardcoding string literals. See [Event System Architecture](./event-system.md) for complete reference.
 
 ---
 

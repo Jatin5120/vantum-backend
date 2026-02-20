@@ -6,7 +6,7 @@
 import { CartesiaClient } from '@cartesia/cartesia-js';
 import { logger, generateId } from '@/shared/utils';
 import { ttsSessionService, TTSSession } from './tts-session.service';
-import { cartesiaConfig, ttsRetryConfig, ttsTimeoutConfig, TTS_CONSTANTS } from '../config';
+import { cartesiaConfig, ttsTimeoutConfig, TTS_CONSTANTS } from '../config';
 import { classifyCartesiaError } from '../utils';
 import { TTSErrorType } from '../types';
 import {
@@ -22,12 +22,33 @@ import { WebSocketUtils, MessagePackHelper } from '@/modules/socket/utils';
 import { VOICECHAT_EVENTS } from '@Jatin5120/vantum-shared';
 import { pack } from 'msgpackr';
 
+/** Minimal interface for the Cartesia audio source event emitter */
+interface CartesiaAudioSource {
+  on(_event: string, _handler: (..._args: unknown[]) => unknown): void;
+  off(_event: string, _handler: (..._args: unknown[]) => unknown): void;
+  buffer: Int16Array | Uint8Array;
+  writeIndex: number;
+}
+
+/** Minimal interface for the Cartesia WebSocket client */
+interface CartesiaWsClient {
+  send(_params: Record<string, unknown>): Promise<{ source: CartesiaAudioSource }>;
+  disconnect(): void;
+  socket?: { ping(): void };
+}
+
+/** Minimal interface for the Cartesia connection events emitter */
+interface CartesiaConnectionEvents {
+  on(_event: string, _handler: () => void): void;
+  off(_event: string, _handler: () => void): void;
+}
+
 /**
  * TTSService - Core TTS business logic
  */
 export class TTSService {
   private readonly apiKey: string;
-  private cleanupTimer?: NodeJS.Timeout;
+  private cleanupTimer?: ReturnType<typeof setInterval>;
   private isShuttingDown = false;
   private peakConcurrentSessions = 0;
   private totalSessionsCreated = 0;
@@ -96,10 +117,10 @@ export class TTSService {
     if (!session) return 0;
 
     // Store listener references for cleanup
-    let enqueueHandler: ((context: any) => Promise<void>) | null = null;
-    let closeHandler: (() => void) | null = null;
-    let errorHandler: ((error: Error) => void) | null = null;
-    let audioSource: any = null;
+    let enqueueHandler: ((..._args: unknown[]) => unknown) | null = null;
+    let closeHandler: ((..._args: unknown[]) => unknown) | null = null;
+    let errorHandler: ((..._args: unknown[]) => unknown) | null = null;
+    let audioSource: CartesiaAudioSource | null = null;
 
     // Wrap entire synthesis in a Promise that resolves with audio duration
     return new Promise<number>((resolve, reject) => {
@@ -115,13 +136,14 @@ export class TTSService {
             return;
           }
 
+          // Truncate text if exceeds max length
           if (text.length > TTS_CONSTANTS.MAX_TEXT_LENGTH) {
-            logger.warn('Text too long, truncating', {
+            text = text.substring(0, TTS_CONSTANTS.MAX_TEXT_LENGTH);
+            logger.warn('Text truncated to max length', {
               sessionId,
               originalLength: text.length,
-              maxLength: TTS_CONSTANTS.MAX_TEXT_LENGTH,
+              truncatedLength: text.length,
             });
-            text = text.substring(0, TTS_CONSTANTS.MAX_TEXT_LENGTH);
           }
 
           // Update activity timestamp
@@ -159,213 +181,233 @@ export class TTSService {
           const utteranceId = generateId();
           session.currentUtteranceId = utteranceId;
 
-          logger.info('Starting TTS synthesis', { sessionId, utteranceId, textLength: text.length });
+          logger.info('Starting TTS synthesis', {
+            sessionId,
+            utteranceId,
+            textLength: text.length,
+          });
 
           // Transition to GENERATING state
           session.transitionTo(TTSState.GENERATING);
 
-      // Get Cartesia WebSocket client (stored as unknown, type assertion needed)
-      const cartesiaWs = session.cartesiaClient;
-      if (!cartesiaWs) {
-        throw new Error('Cartesia client not connected');
-      }
+          // Get Cartesia WebSocket client (stored as unknown, cast to typed interface)
+          const cartesiaWs = session.cartesiaClient as CartesiaWsClient | null;
+          if (!cartesiaWs) {
+            throw new Error('Cartesia client not connected');
+          }
 
-      // Send text to Cartesia for synthesis and get audio source
-      // Note: SDK expects camelCase (modelId, outputFormat, sampleRate) even though
-      // the wire protocol uses snake_case. The SDK handles the conversion.
-      const response = await (cartesiaWs as any).send({
-        modelId: cartesiaConfig.model,
-        voice: {
-          mode: 'id',
-          id: options?.voiceId || session.config.voiceId,
-        },
-        transcript: text,
-        outputFormat: {
-          container: 'raw',
-          encoding: 'pcm_s16le',
-          sampleRate: cartesiaConfig.sampleRate,
-        },
-        language: options?.language || cartesiaConfig.language,
-      });
+          // Send text to Cartesia for synthesis and get audio source
+          // Note: SDK expects camelCase (modelId, outputFormat, sampleRate) even though
+          // the wire protocol uses snake_case. The SDK handles the conversion.
+          const response = await cartesiaWs.send({
+            modelId: cartesiaConfig.model,
+            voice: {
+              mode: 'id',
+              id: options?.voiceId || session.config.voiceId,
+            },
+            transcript: text,
+            outputFormat: {
+              container: 'raw',
+              encoding: 'pcm_s16le',
+              sampleRate: cartesiaConfig.sampleRate,
+            },
+            language: options?.language || cartesiaConfig.language,
+          });
 
-      // Get the audio source from the response
-      const source = response.source;
-      audioSource = source; // Store for cleanup
+          // Get the audio source from the response
+          const source = response.source;
+          audioSource = source; // Store for cleanup
 
-      // Track last processed index to avoid re-processing audio data
-      let lastProcessedIndex = 0;
+          // Track last processed index to avoid re-processing audio data
+          let lastProcessedIndex = 0;
 
-      // Listen for audio chunks from the source
-      logger.debug('Registering Cartesia enqueue listener', { sessionId, utteranceId });
+          // Listen for audio chunks from the source
+          logger.debug('Registering Cartesia enqueue listener', { sessionId, utteranceId });
 
-      // P0-2 FIX: Store listener reference for cleanup
-      enqueueHandler = async () => {
-        try {
-          // Read new audio data from source.buffer
-          // source.writeIndex points to the end of available data
-          const audioData = source.buffer.subarray(lastProcessedIndex, source.writeIndex);
+          // P0-2 FIX: Store listener reference for cleanup
+          enqueueHandler = async () => {
+            try {
+              // Read new audio data from source.buffer
+              // source.writeIndex points to the end of available data
+              const audioData = source.buffer.subarray(lastProcessedIndex, source.writeIndex);
 
-          if (audioData.length === 0) {
-            logger.debug('Enqueue event fired but no new data', {
+              if (audioData.length === 0) {
+                logger.debug('Enqueue event fired but no new data', {
+                  sessionId,
+                  lastProcessedIndex,
+                  writeIndex: source.writeIndex,
+                });
+                return;
+              }
+
+              logger.debug('🎵 Cartesia audio data received!', {
+                sessionId,
+                utteranceId,
+                byteLength: audioData.byteLength,
+                samplesCount: audioData.length,
+                lastProcessedIndex,
+                writeIndex: source.writeIndex,
+              });
+
+              // Convert to Node.js Buffer
+              const audioBuffer = Buffer.from(
+                audioData.buffer,
+                audioData.byteOffset,
+                audioData.byteLength
+              );
+
+              // Update index for next iteration
+              lastProcessedIndex = source.writeIndex;
+
+              // Handle the audio chunk
+              await this.handleAudioChunk(session, audioBuffer);
+            } catch (err) {
+              logger.error('Error handling audio from Cartesia', {
+                sessionId: session.sessionId,
+                utteranceId: session.currentUtteranceId,
+                error: err instanceof Error ? err.message : String(err),
+              });
+              session.metrics.errors++;
+            }
+          };
+
+          // Listen for 'enqueue' event (not 'chunk'!)
+          // The Cartesia SDK emits 'enqueue' when new audio data is available
+          source.on('enqueue', enqueueHandler);
+
+          logger.debug('Enqueue listener registered', { sessionId, utteranceId });
+
+          // IMPORTANT: Check if audio was already buffered before we registered the listener
+          // This prevents a race condition where synthesis completes before we attach the listener
+          if (source.writeIndex > 0) {
+            logger.debug('Processing pre-buffered audio', {
               sessionId,
-              lastProcessedIndex,
-              writeIndex: source.writeIndex,
+              utteranceId,
+              prebufferedBytes: source.writeIndex,
             });
-            return;
+
+            // P1-1 FIX: Capture writeIndex before async processing to prevent race condition
+            const prebufferedData = source.buffer.subarray(0, source.writeIndex);
+            if (prebufferedData.length > 0) {
+              // Capture writeIndex before async processing
+              const currentWriteIndex = source.writeIndex;
+
+              try {
+                const audioBuffer = Buffer.from(
+                  prebufferedData.buffer,
+                  prebufferedData.byteOffset,
+                  prebufferedData.byteLength
+                );
+
+                // Update index BEFORE async call to prevent race condition
+                lastProcessedIndex = currentWriteIndex;
+
+                await this.handleAudioChunk(session, audioBuffer);
+              } catch (err) {
+                logger.error('Error processing pre-buffered audio', {
+                  sessionId,
+                  utteranceId,
+                  error: err,
+                });
+                // Note: Don't revert lastProcessedIndex - data is lost on error anyway
+              }
+            }
           }
 
-          logger.debug('🎵 Cartesia audio data received!', {
-            sessionId,
-            utteranceId,
-            byteLength: audioData.byteLength,
-            samplesCount: audioData.length,
-            lastProcessedIndex,
-            writeIndex: source.writeIndex,
-          });
+          // P0-2 FIX: Store listener reference for cleanup
+          closeHandler = () => {
+            try {
+              logger.debug('Audio source closed, synthesis complete', {
+                sessionId,
+                utteranceId,
+                chunksReceived: session.metrics.chunksGenerated,
+                wasSynthesisSuccessful: session.metrics.chunksGenerated > 0,
+              });
 
-          // Convert to Node.js Buffer
-          const audioBuffer = Buffer.from(audioData.buffer, audioData.byteOffset, audioData.byteLength);
+              // NOTE: No manual listener cleanup needed - the audio source self-cleans on close
+              // The Cartesia SDK's audio source manages its own lifecycle and event listeners
+              // Attempting to remove listeners here causes errors and prevents state transition
 
-          // Update index for next iteration
-          lastProcessedIndex = source.writeIndex;
+              // Get audio duration from completion handler
+              const audioDurationMs = this.handleSynthesisComplete(session);
 
-          // Handle the audio chunk
-          await this.handleAudioChunk(session, audioBuffer);
-        } catch (error) {
-          logger.error('Error handling audio from Cartesia', {
-            sessionId: session.sessionId,
-            utteranceId: session.currentUtteranceId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-          session.metrics.errors++;
-        }
-      };
+              // Resolve the synthesis Promise with audio duration (enables sequential playback)
+              if (session.synthesisPromise) {
+                session.synthesisPromise.resolve(audioDurationMs);
+                session.synthesisPromise = null; // Clean up
+                logger.debug('Synthesis Promise resolved', {
+                  sessionId,
+                  utteranceId,
+                  audioDurationMs,
+                });
+              }
+            } catch (err) {
+              logger.error('Error handling synthesis complete', {
+                sessionId: session.sessionId,
+                utteranceId,
+                error: err instanceof Error ? err.message : String(err),
+              });
 
-      // Listen for 'enqueue' event (not 'chunk'!)
-      // The Cartesia SDK emits 'enqueue' when new audio data is available
-      source.on('enqueue', enqueueHandler);
+              // Reject Promise on error
+              if (session.synthesisPromise) {
+                session.synthesisPromise.reject(
+                  err instanceof Error ? err : new Error(String(err))
+                );
+                session.synthesisPromise = null; // Clean up
+              }
+            }
+          };
 
-      logger.debug('Enqueue listener registered', { sessionId, utteranceId });
+          // Listen for completion
+          source.on('close', closeHandler);
 
-      // IMPORTANT: Check if audio was already buffered before we registered the listener
-      // This prevents a race condition where synthesis completes before we attach the listener
-      if (source.writeIndex > 0) {
-        logger.debug('Processing pre-buffered audio', {
-          sessionId,
-          utteranceId,
-          prebufferedBytes: source.writeIndex,
-        });
+          // P0-2 FIX: Store listener reference for cleanup
+          errorHandler = (rawError: unknown) => {
+            const error = rawError instanceof Error ? rawError : new Error(String(rawError));
+            logger.error('🚨 Cartesia source error event', {
+              sessionId,
+              utteranceId,
+              error: error.message,
+              errorType: error?.constructor?.name,
+              errorStack: error.stack,
+            });
 
-        // P1-1 FIX: Capture writeIndex before async processing to prevent race condition
-        const prebufferedData = source.buffer.subarray(0, source.writeIndex);
-        if (prebufferedData.length > 0) {
-          // Capture writeIndex before async processing
-          const currentWriteIndex = source.writeIndex;
+            try {
+              // NOTE: No manual listener cleanup needed - error handler will trigger cleanup
+              // The audio source manages its own lifecycle and will be garbage collected
+              // after the error is handled and the source is closed
 
-          try {
-            const audioBuffer = Buffer.from(
-              prebufferedData.buffer,
-              prebufferedData.byteOffset,
-              prebufferedData.byteLength
-            );
+              this.handleCartesiaError(session, error);
 
-            // Update index BEFORE async call to prevent race condition
-            lastProcessedIndex = currentWriteIndex;
+              // Reject the synthesis Promise on error
+              if (session.synthesisPromise) {
+                session.synthesisPromise.reject(error);
+                session.synthesisPromise = null; // Clean up
+                logger.debug('Synthesis Promise rejected due to Cartesia error', {
+                  sessionId,
+                  utteranceId,
+                });
+              }
+            } catch (handlingError) {
+              logger.error('Error in error handler', {
+                sessionId,
+                utteranceId,
+                originalError: error,
+                handlingError,
+              });
 
-            await this.handleAudioChunk(session, audioBuffer);
-          } catch (error) {
-            logger.error('Error processing pre-buffered audio', { sessionId, utteranceId, error });
-            // Note: Don't revert lastProcessedIndex - data is lost on error anyway
-          }
-        }
-      }
+              // Reject Promise if not already done
+              if (session.synthesisPromise) {
+                session.synthesisPromise.reject(
+                  handlingError instanceof Error ? handlingError : new Error(String(handlingError))
+                );
+                session.synthesisPromise = null; // Clean up
+              }
+            }
+          };
 
-      // P0-2 FIX: Store listener reference for cleanup
-      closeHandler = () => {
-        try {
-          logger.debug('Audio source closed, synthesis complete', {
-            sessionId,
-            utteranceId,
-            chunksReceived: session.metrics.chunksGenerated,
-            wasSynthesisSuccessful: session.metrics.chunksGenerated > 0,
-          });
-
-          // NOTE: No manual listener cleanup needed - the audio source self-cleans on close
-          // The Cartesia SDK's audio source manages its own lifecycle and event listeners
-          // Attempting to remove listeners here causes errors and prevents state transition
-
-          // Get audio duration from completion handler
-          const audioDurationMs = this.handleSynthesisComplete(session);
-
-          // Resolve the synthesis Promise with audio duration (enables sequential playback)
-          if (session.synthesisPromise) {
-            session.synthesisPromise.resolve(audioDurationMs);
-            session.synthesisPromise = null; // Clean up
-            logger.debug('Synthesis Promise resolved', { sessionId, utteranceId, audioDurationMs });
-          }
-        } catch (error) {
-          logger.error('Error handling synthesis complete', {
-            sessionId: session.sessionId,
-            utteranceId,
-            error: error instanceof Error ? error.message : String(error),
-          });
-
-          // Reject Promise on error
-          if (session.synthesisPromise) {
-            session.synthesisPromise.reject(
-              error instanceof Error ? error : new Error(String(error))
-            );
-            session.synthesisPromise = null; // Clean up
-          }
-        }
-      };
-
-      // Listen for completion
-      source.on('close', closeHandler);
-
-      // P0-2 FIX: Store listener reference for cleanup
-      errorHandler = (error: Error) => {
-        logger.error('🚨 Cartesia source error event', {
-          sessionId,
-          utteranceId,
-          error: error instanceof Error ? error.message : String(error),
-          errorType: error?.constructor?.name,
-          errorStack: error instanceof Error ? error.stack : undefined,
-        });
-
-        try {
-          // NOTE: No manual listener cleanup needed - error handler will trigger cleanup
-          // The audio source manages its own lifecycle and will be garbage collected
-          // after the error is handled and the source is closed
-
-          this.handleCartesiaError(session, error);
-
-          // Reject the synthesis Promise on error
-          if (session.synthesisPromise) {
-            session.synthesisPromise.reject(error);
-            session.synthesisPromise = null; // Clean up
-            logger.debug('Synthesis Promise rejected due to Cartesia error', { sessionId, utteranceId });
-          }
-        } catch (handlingError) {
-          logger.error('Error in error handler', {
-            sessionId,
-            utteranceId,
-            originalError: error,
-            handlingError,
-          });
-
-          // Reject Promise if not already done
-          if (session.synthesisPromise) {
-            session.synthesisPromise.reject(
-              handlingError instanceof Error ? handlingError : new Error(String(handlingError))
-            );
-            session.synthesisPromise = null; // Clean up
-          }
-        }
-      };
-
-      // Listen for errors
-      source.on('error', errorHandler);
+          // Listen for errors
+          source.on('error', errorHandler);
 
           // Increment metrics
           session.metrics.textsSynthesized++;
@@ -382,19 +424,18 @@ export class TTSService {
           // P1-2 FIX: Defensive cleanup - Remove event listeners to prevent memory leak
           // The SDK claims self-cleanup on close, but we do this defensively in case
           // the error occurs before the 'close' event fires or if the SDK doesn't clean up
-          const source = (session as any).currentSource;
-          if (source) {
+          const currentSource = (session as unknown as Record<string, unknown>)['currentSource'] as
+            | CartesiaAudioSource
+            | undefined;
+          if (currentSource) {
             try {
-              source.off('enqueue');
-              source.off('close');
-              source.off('error');
+              currentSource.off('enqueue', () => {});
+              currentSource.off('close', () => {});
+              currentSource.off('error', () => {});
               logger.debug('Event listeners removed after synthesis error', { sessionId });
-            } catch (cleanupError) {
+            } catch {
               // Ignore cleanup errors - SDK may have already cleaned up or source may be invalid
-              logger.debug('Listener cleanup failed (may be already cleaned up)', {
-                sessionId,
-                cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
-              });
+              logger.debug('Listener cleanup failed (may be already cleaned up)', { sessionId });
             }
           }
 
@@ -431,11 +472,10 @@ export class TTSService {
                 audioSource.off('error', errorHandler);
               }
               logger.debug('Cleaned up audio source event listeners', { sessionId });
-            } catch (cleanupError) {
+            } catch {
               // Ignore cleanup errors - SDK may have already cleaned up
               logger.debug('Listener cleanup error in finally block (may be already cleaned up)', {
                 sessionId,
-                cleanupError: cleanupError instanceof Error ? cleanupError.message : String(cleanupError),
               });
             }
           }
@@ -464,7 +504,7 @@ export class TTSService {
       logger.info('Cancelling TTS synthesis', { sessionId });
 
       // Cancel Cartesia synthesis
-      const cartesiaWs = session.cartesiaClient;
+      const cartesiaWs = session.cartesiaClient as CartesiaWsClient | null;
       if (cartesiaWs) {
         // Send cancel message to Cartesia (if supported)
         // TODO: Check if Cartesia supports cancellation
@@ -570,8 +610,8 @@ export class TTSService {
     logger.info('Setting up Cartesia connection event listeners', { sessionId });
 
     try {
-      // Cast to any since Cartesia SDK returns complex generic type
-      const events = connectionEvents as any;
+      // Cast to typed interface since Cartesia SDK returns complex generic type
+      const events = connectionEvents as CartesiaConnectionEvents;
 
       // Listen for 'open' event (connection established)
       events.on('open', () => {
@@ -657,7 +697,7 @@ export class TTSService {
       const audioBytes = session.currentUtteranceAudioBytes;
       const sampleRate = 48000; // Browser playback rate
       const bytesPerSample = 2; // 16-bit PCM
-      const durationSeconds = (audioBytes / bytesPerSample) / sampleRate;
+      const durationSeconds = audioBytes / bytesPerSample / sampleRate;
       const durationMs = Math.round(durationSeconds * 1000);
 
       logger.info('TTS synthesis complete', {
@@ -753,7 +793,7 @@ export class TTSService {
 
     logger.debug('Sent audio output start', {
       sessionId,
-      utteranceId: session.currentUtteranceId
+      utteranceId: session.currentUtteranceId,
     });
   }
 
@@ -808,16 +848,13 @@ export class TTSService {
       return;
     }
 
-    const message = MessagePackHelper.packComplete(
-      session.currentUtteranceId,
-      sessionId
-    );
+    const message = MessagePackHelper.packComplete(session.currentUtteranceId, sessionId);
 
     WebSocketUtils.safeSend(ws, message, 'audio output complete');
 
     logger.info('Sent audio output complete', {
       sessionId,
-      utteranceId: session.currentUtteranceId
+      utteranceId: session.currentUtteranceId,
     });
 
     // Clear utteranceId after completion
@@ -827,7 +864,10 @@ export class TTSService {
   /**
    * Send tts.error event to client
    */
-  private sendTTSError(sessionId: string, error: { type: string; message: string; retryable: boolean }): void {
+  private sendTTSError(
+    sessionId: string,
+    error: { type: string; message: string; retryable: boolean }
+  ): void {
     const ws = websocketService.getWebSocket(sessionId);
     if (!ws) {
       logger.warn('No WebSocket connection for session', { sessionId });
@@ -859,7 +899,7 @@ export class TTSService {
 
     session.keepAliveInterval = setInterval(() => {
       try {
-        const cartesiaWs = session.cartesiaClient as any;
+        const cartesiaWs = session.cartesiaClient as CartesiaWsClient | null;
         if (cartesiaWs && cartesiaWs.socket) {
           // Send ping to keep connection alive
           cartesiaWs.socket.ping();
@@ -939,11 +979,11 @@ export class TTSService {
       // Clear Cartesia client
       if (session.cartesiaClient) {
         try {
-          const cartesiaWs = session.cartesiaClient as any;
+          const cartesiaWs = session.cartesiaClient as CartesiaWsClient;
           if (cartesiaWs) {
             cartesiaWs.disconnect();
           }
-        } catch (_closeError) {
+        } catch {
           // Ignore close errors
         }
         session.cartesiaClient = null;
@@ -988,8 +1028,7 @@ export class TTSService {
         // Cleanup conditions
         const isIdle = idle > ttsTimeoutConfig.sessionIdleTimeout;
         const isTooLong = duration > ttsTimeoutConfig.sessionTimeout;
-        const isBadState =
-          session.connectionState === 'disconnected' && !session.isReconnecting;
+        const isBadState = session.connectionState === 'disconnected' && !session.isReconnecting;
 
         if (isIdle || isTooLong || isBadState) {
           logger.info('Cleaning up stale TTS session', {
@@ -1158,7 +1197,7 @@ export class TTSService {
         try {
           await ttsSessionService.deleteSession(session.sessionId);
           this.totalSessionsCleaned++;
-        } catch (_cleanupError) {
+        } catch {
           // Ignore cleanup errors
         }
       }
@@ -1176,7 +1215,7 @@ export class TTSService {
           await session.cleanup();
           await ttsSessionService.deleteSession(session.sessionId);
           this.totalSessionsCleaned++;
-        } catch (_error) {
+        } catch {
           // Ignore errors
         }
       }

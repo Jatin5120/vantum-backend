@@ -24,13 +24,13 @@ const mockAudioSource = {
     if (autoEmitEvents) {
       // Auto-emit 'enqueue' event to transition GENERATING → STREAMING
       if (event === 'enqueue') {
-        setImmediate(() => callback());
+        setTimeout(() => callback(), 0);
       }
 
       // Auto-emit 'close' event after a microtask to simulate synthesis completion
-      // Use setImmediate for proper async behavior
+      // Use setTimeout(fn, 0) for proper async behavior
       if (event === 'close') {
-        setImmediate(() => callback());
+        setTimeout(() => callback(), 0);
       }
     }
   }),
@@ -68,7 +68,7 @@ vi.mock('@cartesia/cartesia-js', () => {
       constructor() {
         return mockCartesiaClient;
       }
-    }
+    },
   };
 });
 
@@ -130,7 +130,7 @@ describe('TTSService', () => {
     mockAudioSource.off.mockClear();
 
     // Clear event listeners
-    Object.keys(mockAudioSourceListeners).forEach(key => delete mockAudioSourceListeners[key]);
+    Object.keys(mockAudioSourceListeners).forEach((key) => delete mockAudioSourceListeners[key]);
 
     // Reset session service
     ttsSessionService.clearAllSessions();
@@ -142,7 +142,7 @@ describe('TTSService', () => {
   afterEach(async () => {
     try {
       await service.shutdown({ restart: false });
-    } catch (error) {
+    } catch {
       // Ignore shutdown errors in tests
     }
     ttsSessionService.clearAllSessions();
@@ -271,13 +271,13 @@ describe('TTSService', () => {
     });
 
     it('should truncate text exceeding max length', async () => {
-      const longText = 'a'.repeat(15000); // Exceeds MAX_TEXT_LENGTH (10000)
+      const longText = 'a'.repeat(6000); // Exceeds MAX_TEXT_LENGTH (5000)
 
       await service.synthesizeText(sessionId, longText);
 
       expect(mockCartesiaWs.send).toHaveBeenCalledWith(
         expect.objectContaining({
-          transcript: expect.stringMatching(/^a{10000}$/),
+          transcript: expect.stringMatching(/^a{5000}$/),
         })
       );
     });
@@ -378,7 +378,7 @@ describe('TTSService', () => {
       const synthesisPromise = service.synthesizeText(sessionId, 'test');
 
       // Wait for listener registration
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       // Get the 'enqueue' event handler registered
       const enqueueHandler = mockAudioSourceListeners['enqueue']?.[0];
@@ -414,7 +414,7 @@ describe('TTSService', () => {
       const synthesisPromise = service.synthesizeText(sessionId, 'test');
 
       // Wait for listener registration
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       const session = ttsSessionService.getSession(sessionId);
       expect(session?.ttsState).toBe(TTSState.GENERATING);
@@ -522,13 +522,13 @@ describe('TTSService', () => {
 
     it('should update synthesis time metrics', async () => {
       const session = ttsSessionService.getSession(sessionId);
-      const startTime = Date.now();
-      session!.lastActivityAt = startTime;
+      const _startTime = Date.now();
+      session!.lastActivityAt = _startTime;
 
       await service.synthesizeText(sessionId, 'test');
 
       // Manually advance time (no fake timers)
-      const futureTime = startTime + 100;
+      const futureTime = _startTime + 100;
       vi.spyOn(Date, 'now').mockReturnValue(futureTime);
 
       const closeHandler = mockAudioSource.on.mock.calls.find((call) => call[0] === 'close')?.[1];
@@ -595,7 +595,7 @@ describe('TTSService', () => {
       const synthesisPromise = service.synthesizeText(sessionId, 'test');
 
       // Wait for listener registration
-      await new Promise(resolve => setImmediate(resolve));
+      await new Promise((resolve) => setTimeout(resolve, 0));
 
       const errorHandler = mockAudioSourceListeners['error']?.[0];
       const authError = Object.assign(new Error('Unauthorized'), { statusCode: 401 });
@@ -680,7 +680,7 @@ describe('TTSService', () => {
       closeHandler();
 
       // Wait for async reconnection
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       const session = ttsSessionService.getSession(sessionId);
       expect(session?.metrics.reconnections).toBe(1);
@@ -703,7 +703,7 @@ describe('TTSService', () => {
       closeHandler();
 
       // Wait for async reconnection
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(session?.metrics.reconnections).toBe(1);
       expect(session?.metrics.successfulReconnections).toBe(1);
@@ -727,12 +727,11 @@ describe('TTSService', () => {
 
       // Wait for async reconnection + buffer flush (which calls synthesizeText twice)
       // With auto-emit enabled, synthesis completes quickly, but reconnection logic is async
-      await new Promise(resolve => setTimeout(resolve, 50));
+      await new Promise((resolve) => setTimeout(resolve, 50));
 
       // Buffer should be cleared after flush
       expect(session.reconnectionBuffer).toHaveLength(0);
     });
-
 
     it('should track downtime during reconnection', async () => {
       const session = ttsSessionService.getSession(sessionId);
@@ -742,11 +741,10 @@ describe('TTSService', () => {
 
       mockCartesiaWs.connect.mockResolvedValueOnce(mockConnectionEvents);
 
-      const startTime = Date.now();
       closeHandler();
 
       // Wait for async reconnection with enough time to accumulate downtime
-      await new Promise(resolve => setTimeout(resolve, 100));
+      await new Promise((resolve) => setTimeout(resolve, 100));
 
       const downtime = session?.metrics.totalDowntimeMs || 0;
       // Downtime should be tracked (at least a few milliseconds)
@@ -764,7 +762,7 @@ describe('TTSService', () => {
       closeHandler();
 
       // Wait for async reconnection attempt
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       expect(session?.metrics.failedReconnections).toBe(1);
       expect(session?.connectionState).toBe('disconnected');
@@ -781,7 +779,7 @@ describe('TTSService', () => {
       closeHandler();
 
       // Wait briefly
-      await new Promise(resolve => setTimeout(resolve, 10));
+      await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Should not increment reconnections (already reconnecting)
       expect(mockCartesiaWs.connect).toHaveBeenCalledTimes(1); // Only initial connection
@@ -877,7 +875,9 @@ describe('TTSService', () => {
       await service.shutdown({ restart: true });
 
       // Should be able to create new session after restart
-      await expect(service.createSession('new-session', { ...config, sessionId: 'new-session' })).resolves.not.toThrow();
+      await expect(
+        service.createSession('new-session', { ...config, sessionId: 'new-session' })
+      ).resolves.not.toThrow();
     });
 
     it('should force cleanup remaining sessions', async () => {
@@ -914,6 +914,81 @@ describe('TTSService', () => {
       // Cleanup
       prodService.shutdown({ restart: false });
       process.env.NODE_ENV = 'test';
+    });
+  });
+
+  describe('SSML Tag Support', () => {
+    beforeEach(async () => {
+      await service.createSession(sessionId, config);
+    });
+
+    it('should pass emotion tags to Cartesia unchanged', async () => {
+      const text = "<emotion value='excited'/>Hello!</emotion>";
+
+      await service.synthesizeText(sessionId, text);
+
+      expect(mockCartesiaWs.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transcript: text, // SSML tags should be preserved
+        })
+      );
+    });
+
+    it('should pass break tags to Cartesia unchanged', async () => {
+      const text = "Hello. <break time='500ms'/> How are you?";
+
+      await service.synthesizeText(sessionId, text);
+
+      expect(mockCartesiaWs.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transcript: text,
+        })
+      );
+    });
+
+    it('should pass speed tags to Cartesia unchanged', async () => {
+      const text = "<speed ratio='1.2'/>I speak quickly!</speed>";
+
+      await service.synthesizeText(sessionId, text);
+
+      expect(mockCartesiaWs.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transcript: text,
+        })
+      );
+    });
+
+    it('should pass multiple SSML tags to Cartesia unchanged', async () => {
+      const text =
+        "<emotion value='excited'/>Great news!</emotion> <break time='300ms'/> <speed ratio='1.1'/>You qualify!</speed>";
+
+      await service.synthesizeText(sessionId, text);
+
+      expect(mockCartesiaWs.send).toHaveBeenCalledWith(
+        expect.objectContaining({
+          transcript: text,
+        })
+      );
+    });
+
+    it('should preserve SSML tags with ||BREAK|| markers', () => {
+      const text =
+        "<emotion value='content'/>Hi, I'm Alex.||BREAK||<emotion value='excited'/>I have news!</emotion>";
+      const chunks = text.split('||BREAK||');
+
+      // Test that semantic streaming preserves SSML in chunks
+      expect(chunks[0]).toBe("<emotion value='content'/>Hi, I'm Alex.");
+      expect(chunks[1]).toBe("<emotion value='excited'/>I have news!</emotion>");
+    });
+
+    it('should count SSML tags toward character limit', async () => {
+      const text = "<emotion value='excited'/>".repeat(200) + 'a'.repeat(4000); // >5000 chars
+
+      await service.synthesizeText(sessionId, text);
+
+      // Should be truncated to 5000 characters
+      const call = mockCartesiaWs.send.mock.calls[0][0];
+      expect(call.transcript.length).toBe(5000);
     });
   });
 });

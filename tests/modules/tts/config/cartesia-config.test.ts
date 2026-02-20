@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 
 describe('Cartesia Configuration', () => {
-  let originalEnv: NodeJS.ProcessEnv;
+  let originalEnv: typeof process.env;
 
   beforeEach(() => {
     // Save original environment
@@ -243,7 +243,9 @@ describe('Cartesia Configuration', () => {
       const { cartesiaConfig } = await import('@/modules/tts/config/cartesia.config');
 
       // Voice ID should be a valid UUID format
-      expect(cartesiaConfig.voiceId).toMatch(/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/);
+      expect(cartesiaConfig.voiceId).toMatch(
+        /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/
+      );
     });
 
     it('should use production API endpoint', async () => {
@@ -300,7 +302,7 @@ describe('TTS Constants', () => {
   it('should have buffer limits', async () => {
     const { TTS_CONSTANTS } = await import('@/modules/tts/config/tts.constants');
 
-    expect(TTS_CONSTANTS.MAX_TEXT_LENGTH).toBe(10000);
+    expect(TTS_CONSTANTS.MAX_TEXT_LENGTH).toBe(5000);
     expect(TTS_CONSTANTS.MAX_BUFFER_SIZE).toBe(1048576); // 1MB
   });
 
@@ -342,7 +344,7 @@ describe('TTS Retry Configuration', () => {
 });
 
 describe('TTS Timeout Configuration', () => {
-  let originalEnv: NodeJS.ProcessEnv;
+  let originalEnv: typeof process.env;
 
   beforeEach(() => {
     originalEnv = { ...process.env };

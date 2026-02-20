@@ -1,52 +1,53 @@
 # MVP Audio Pipeline Documentation
 
-**Version**: 1.0.0
-**Date**: 2026-01-04
-**Status**: Current Implementation (MVP)
+**Version**: 2.0.0
+**Date**: 2026-02-20
+**Status**: Current Implementation (Full AI Pipeline)
 **Related**: [Architecture Documentation](./architecture.md), [WebSocket Protocol](../protocol/websocket-protocol.md)
 
 ---
 
 ## Overview
 
-This document describes the **current MVP implementation** of the audio pipeline in Vantum backend. The MVP philosophy prioritizes **speed of implementation** and **working functionality** over automatic/intelligent triggers.
-
-**Key MVP Principle**: Manual user control for all actions now, automatic intelligence later.
+This document describes the **current audio pipeline** in Vantum backend. The pipeline now includes full STT → LLM → TTS integration. The trigger remains manual (user clicks "Stop recording"), with automatic VAD-based triggers planned as a future enhancement.
 
 ### What This Document Covers
 
-1. **Current MVP Flow** - How the pipeline works right now
-2. **Manual Trigger Strategy** - Why we chose manual controls
+1. **Current Pipeline Flow** - How STT → LLM → TTS works right now
+2. **Manual Trigger Strategy** - Why we keep manual controls for now
 3. **Technical Implementation** - How components interact
-4. **Future Enhancement Roadmap** - Path to automatic intelligence
-5. **Migration Strategy** - How we'll evolve from MVP to production
+4. **Future Enhancement Roadmap** - Path to automatic/intelligent triggers
+5. **Migration Strategy** - How we'll evolve to full production
 
 ---
 
 ## Current MVP Behavior
 
-### TTS Trigger Strategy (Manual)
+### Pipeline Trigger Strategy (Manual)
 
-**Current Implementation**: TTS synthesis triggers ONLY when user clicks the "Stop recording" button (sends `audio.input.end` event).
+**Current Implementation**: The STT → LLM → TTS pipeline triggers when user clicks the "Stop recording" button (sends `audio.input.end` event).
 
 **What This Means**:
-- User starts recording → Server starts STT transcription
-- User speaks → Deepgram transcribes in real-time → Client receives `transcript.interim` and `transcript.final` events
-- User clicks "Stop recording" → Server finalizes accumulated transcript → Triggers TTS synthesis
-- Server synthesizes speech with Cartesia → Client receives audio chunks → Client plays ONLY Cartesia audio
 
-**What This Does NOT Do**:
+- User starts recording → Server initializes STT, LLM session, TTS session
+- User speaks → Deepgram transcribes in real-time → Client receives `transcript.interim` and `transcript.final` events
+- User clicks "Stop recording" → Server finalizes accumulated transcript
+- Transcript → LLM (OpenAI GPT-4.1) → streaming response with `||BREAK||` markers
+- Semantic chunks progressively sent to Cartesia TTS → Audio chunks streamed to client
+
+**What This Does NOT Do** (yet):
+
 - ❌ No automatic synthesis on `transcript.final` during recording
 - ❌ No VAD-based silence detection
 - ❌ No automatic trigger on speech pause
 - ❌ No debouncing for partial transcripts
-- ❌ No interruption handling
+- ❌ No interruption handling (cancel TTS if user speaks during response)
 
-**Why Manual?**:
-- **Simple**: Easy to understand and debug
-- **Fast**: Implemented in < 1 day
-- **Predictable**: User has full control
-- **Iterative**: Validates entire pipeline before adding complexity
+**Why Manual Trigger?**:
+
+- **Predictable**: User has full control, easy to test and debug
+- **Iterative**: Validates entire pipeline end-to-end before adding trigger complexity
+- **Sufficient**: Works well for demos and initial production use
 
 ### Audio Echo Strategy (Removed)
 
@@ -55,6 +56,7 @@ This document describes the **current MVP implementation** of the audio pipeline
 **Current Behavior**: Audio echo is completely removed. Client hears ONLY Cartesia-synthesized audio.
 
 **Why Removed?**:
+
 - **Cleaner pipeline**: No unnecessary buffering or playback
 - **Reduces confusion**: No duplicate audio (original + TTS)
 - **Simpler architecture**: Fewer components to maintain
@@ -107,7 +109,7 @@ sequenceDiagram
     Backend->>Client (Browser): transcript.final
     Client (Browser)->>User: Display final transcript
 
-    Note over Backend: NO automatic TTS trigger<br/>(MVP: Wait for manual stop)
+    Note over Backend: NO automatic LLM/TTS trigger<br/>(Wait for manual stop)
 
     Note over User,Cartesia: Phase 4: User Stops Recording (MANUAL TRIGGER)
 
@@ -116,9 +118,11 @@ sequenceDiagram
     Backend->>Deepgram: Finalize transcript
     Backend->>Backend: Get accumulated transcript
 
-    Note over Backend: TRIGGER TTS SYNTHESIS<br/>(Manual trigger point)
+    Note over Backend: TRIGGER LLM → TTS PIPELINE
 
-    Backend->>Cartesia: Synthesize "Hello, how are you?"
+    Backend->>Backend: llmController.generateResponse(transcript)
+    Backend->>Backend: LLMStreamingService extracts ||BREAK|| chunks
+    Backend->>Cartesia: Synthesize chunk 1 (semantic chunk)
     Backend->>Client (Browser): audio.output.start (utteranceId)
 
     Note over User,Cartesia: Phase 5: TTS Audio Streaming
@@ -146,21 +150,25 @@ sequenceDiagram
 ### Key Phases Explained
 
 **Phase 1-2: Setup (Connection + Recording Start)**
+
 - Standard WebSocket connection
 - Server generates sessionId
 - Both STT and TTS sessions initialized upfront
 
 **Phase 3: Real-time Transcription (User Speaking)**
+
 - Audio flows: Browser (48kHz) → Backend → Resample (16kHz) → Deepgram
 - Transcripts flow back: Deepgram → Backend → Client
 - **CRITICAL**: No TTS trigger during this phase (MVP)
 
 **Phase 4: Manual Trigger (User Stops Recording)**
+
 - User explicit action: Click "Stop recording" button
 - Backend finalizes Deepgram transcript (accumulated text)
-- **TRIGGER POINT**: Backend calls `ttsController.synthesize()` with accumulated transcript
+- **TRIGGER POINT**: Backend calls `llmController.generateResponse()` → LLM streams response → `LLMStreamingService` extracts `||BREAK||` chunks → Each chunk synthesized via `ttsController.synthesize()`
 
 **Phase 5: TTS Streaming**
+
 - Cartesia generates audio (16kHz) → Backend resamples (48kHz) → Client plays
 - Client hears ONLY Cartesia voice (no echo)
 
@@ -171,29 +179,34 @@ sequenceDiagram
 ### Component Interaction
 
 **Components Involved**:
+
 1. **AudioHandler** (`/src/modules/socket/handlers/audio.handler.ts`)
-   - Handles `audio.input.start`, `audio.input.chunk`, `audio.input.end`
-   - Forwards audio to STT
-   - Triggers TTS on `audio.input.end` (via STT finalization)
+   - Handles `voicechat.audio.start`, `voicechat.audio.chunk`, `voicechat.audio.end`
+   - Forwards audio to STT, triggers STT → LLM → TTS pipeline on `audio.end`
 
 2. **STT Service** (`/src/modules/stt/services/stt.service.ts`)
    - Real-time transcription with Deepgram
    - Accumulates transcript during session
-   - Calls `handleFinalTranscript()` when finalized
+   - `finalizeTranscript()` returns accumulated text on `audio.end`
 
-3. **Transcript Handler** (`/src/modules/tts/handlers/transcript.handler.ts`)
-   - **CRITICAL INTEGRATION POINT** between STT and TTS
-   - Receives final transcript from STT
-   - Triggers TTS synthesis via `ttsController.synthesize()`
+3. **LLM Service** (`/src/modules/llm/services/llm.service.ts`)
+   - **CRITICAL INTEGRATION POINT** — receives transcript, generates AI response
+   - OpenAI GPT-4.1 streaming with conversation context
+   - Calls `LLMStreamingService` to extract semantic chunks
 
-4. **TTS Service** (`/src/modules/tts/services/tts.service.ts`)
+4. **LLM Streaming Service** (`/src/modules/llm/services/llm-streaming.service.ts`)
+   - Buffers LLM tokens, extracts chunks at `||BREAK||` markers
+   - Falls back to sentence-based splitting if no markers present
+   - Sends each chunk to TTS sequentially
+
+5. **TTS Service** (`/src/modules/tts/services/tts.service.ts`)
    - Cartesia WebSocket integration
-   - Generates audio from text
-   - Streams chunks back to client
+   - Synthesizes each semantic chunk to audio
+   - Streams chunks back to client with sequential playback
 
-5. **Audio Resampler** (`/src/modules/audio/services/audio-resampler.service.ts`)
+6. **Audio Resampler** (`/src/modules/audio/services/audio-resampler.service.ts`)
    - Bidirectional resampling (48kHz ↔ 16kHz)
-   - Used for both STT input and TTS output
+   - Used for both STT input (48kHz → 16kHz) and TTS output (16kHz → 48kHz)
 
 ### Data Flow (MVP)
 
@@ -213,8 +226,9 @@ sequenceDiagram
 │  ┌──────────────────────────────────────────────────────────┐  │
 │  │ User clicks "Stop" → audio.input.end event               │  │
 │  │              → STT finalize transcript                    │  │
-│  │              → handleFinalTranscript()                    │  │
-│  │              → ttsController.synthesize()  ← TRIGGER      │  │
+│  │              → llmController.generateResponse()  ← LLM   │  │
+│  │              → LLMStreamingService (||BREAK|| chunks)     │  │
+│  │              → ttsController.synthesize() per chunk       │  │
 │  └──────────────────────────────────────────────────────────┘  │
 │                                                                  │
 │  TTS Synthesis Phase (Cartesia Streaming):                      │
@@ -230,12 +244,14 @@ sequenceDiagram
 ### No Audio Buffering (Simplified)
 
 **Previous Architecture** (with echo):
+
 ```
 Audio chunks → Audio Buffer Service → Store in memory
               → On audio.input.end → Stream back to client
 ```
 
 **Current Architecture** (no echo):
+
 ```
 Audio chunks → Directly to STT (no buffering)
               → Transcripts to client
@@ -243,6 +259,7 @@ Audio chunks → Directly to STT (no buffering)
 ```
 
 **Benefits**:
+
 - Lower memory usage (no buffering)
 - Simpler code (fewer components)
 - Faster implementation (less to test)
@@ -255,11 +272,13 @@ Audio chunks → Directly to STT (no buffering)
 ### Speed of Implementation
 
 **Manual Control**:
+
 - Implemented in < 1 day
 - Simple logic: If `audio.input.end`, trigger TTS
 - Easy to debug: Clear cause → effect
 
 **Automatic Control** (for comparison):
+
 - Requires VAD library integration (2-3 days)
 - Complex silence detection tuning (1-2 days)
 - Edge case handling (partial transcripts, interruptions) (2-3 days)
@@ -269,23 +288,26 @@ Audio chunks → Directly to STT (no buffering)
 
 ### Iterative Development Philosophy
 
-**Phase 1 (MVP - Current)**: Manual triggers, validate core pipeline
-- ✅ STT integration working
-- ✅ TTS integration working
-- ✅ Audio resampling working
-- ✅ End-to-end flow validated
+**Phase 1 (Complete ✅)**: Full AI pipeline with manual trigger
+
+- ✅ STT integration (Deepgram, real-time transcription)
+- ✅ LLM integration (OpenAI GPT-4.1, semantic streaming)
+- ✅ TTS integration (Cartesia, sequential audio playback)
+- ✅ End-to-end STT → LLM → TTS flow validated
 
 **Phase 2 (Enhancement)**: Add automatic triggers
-- VAD-based silence detection
-- Automatic synthesis on speech pause
+
+- VAD-based silence detection (no manual "Stop" button)
+- Automatic pipeline trigger on speech pause
 - Debouncing for partial transcripts
 
-**Phase 3 (Advanced)**: Intelligent orchestration
-- LLM integration
-- Interruption handling
-- Speculative generation
+**Phase 3 (Advanced)**: Conversational intelligence
+
+- Interruption handling (cancel TTS if user speaks)
+- Speculative generation (start LLM on interim transcripts)
 
 **Why This Order?**:
+
 - Validate each layer before adding complexity
 - Faster debugging (fewer moving parts)
 - Clear migration path (manual → automatic → intelligent)
@@ -293,12 +315,14 @@ Audio chunks → Directly to STT (no buffering)
 ### User Experience Trade-offs
 
 **MVP UX (Manual)**:
+
 - ✅ Predictable: User knows when TTS will trigger
 - ✅ Controllable: User decides when to synthesize
 - ❌ Extra click: User must click "Stop recording"
 - ❌ Less natural: Not conversational flow
 
 **Future UX (Automatic)**:
+
 - ✅ Natural: Seamless conversation flow
 - ✅ No manual action: Hands-free operation
 - ❌ Less predictable: User might not expect synthesis
@@ -315,13 +339,11 @@ Audio chunks → Directly to STT (no buffering)
 **Goal**: Remove manual "Stop recording" button. Trigger TTS automatically when Deepgram finalizes transcript.
 
 **Implementation**:
+
 ```typescript
 // File: /src/modules/tts/handlers/transcript.handler.ts
 
-export async function handleFinalTranscript(
-  transcript: string,
-  sessionId: string
-): Promise<void> {
+export async function handleFinalTranscript(transcript: string, sessionId: string): Promise<void> {
   // Current: Called only on audio.input.end
   // Future: Called on EVERY transcript.final from Deepgram
 
@@ -334,6 +356,7 @@ export async function handleFinalTranscript(
 ```
 
 **Changes Required**:
+
 1. Modify `handleFinalTranscript()` to add debouncing
 2. Add timer management (cancel previous, start new)
 3. Handle edge case: User speaks continuously (multiple transcript.final events)
@@ -349,12 +372,14 @@ export async function handleFinalTranscript(
 **Implementation Options**:
 
 **Option A: Use Deepgram's Built-in VAD (RECOMMENDED)**
+
 - Deepgram already detects speech start/end
 - `transcript.final` = user finished speaking (Deepgram VAD)
 - Pros: Already working, production-grade, no additional libraries
 - Cons: Less control over silence threshold
 
 **Option B: Add Explicit VAD Library**
+
 - Library: `@ricky0123/vad-node` or custom WebRTC VAD
 - Analyze audio chunks for voice activity
 - Detect silence (e.g. 500ms no speech)
@@ -362,6 +387,7 @@ export async function handleFinalTranscript(
 - Cons: Additional dependency, latency overhead, tuning complexity
 
 **Recommended: Option A (Deepgram VAD)**
+
 ```typescript
 // No code changes needed!
 // Deepgram transcript.final ALREADY indicates speech end
@@ -377,6 +403,7 @@ export async function handleFinalTranscript(
 **Goal**: Prevent premature TTS synthesis on natural pauses in speech.
 
 **Problem**:
+
 ```
 User says: "Hello... (pause) ...how are you?"
 Deepgram sends: transcript.final("Hello")
@@ -387,16 +414,14 @@ Good behavior: Wait 500ms, combine into "Hello, how are you?"
 ```
 
 **Implementation**:
+
 ```typescript
 // File: /src/modules/tts/handlers/transcript.handler.ts
 
 let debounceTimer: NodeJS.Timeout | null = null;
 let accumulatedText = '';
 
-export async function handleFinalTranscript(
-  transcript: string,
-  sessionId: string
-): Promise<void> {
+export async function handleFinalTranscript(transcript: string, sessionId: string): Promise<void> {
   // Accumulate transcript
   accumulatedText += (accumulatedText ? ' ' : '') + transcript;
 
@@ -424,6 +449,7 @@ export async function handleFinalTranscript(
 **Goal**: Allow user to interrupt AI response mid-speech.
 
 **Flow**:
+
 ```
 AI is speaking (TTS playing)
   → User starts speaking (detected by VAD)
@@ -434,6 +460,7 @@ AI is speaking (TTS playing)
 ```
 
 **State Machine**:
+
 ```
 LISTENING → User speaks → TRANSCRIBING
 TRANSCRIBING → Silence detected → THINKING
@@ -443,6 +470,7 @@ INTERRUPTED → Clear audio queue → LISTENING
 ```
 
 **Implementation**:
+
 ```typescript
 // Monitor for user speech during RESPONDING state
 // If detected:
@@ -462,6 +490,7 @@ INTERRUPTED → Clear audio queue → LISTENING
 **Goal**: Start generating LLM response before user finishes speaking.
 
 **Flow**:
+
 ```
 User speaking → transcript.interim arrives
   → Start LLM generation with partial transcript
@@ -470,11 +499,13 @@ User speaking → transcript.interim arrives
 ```
 
 **Benefits**:
+
 - Near-zero latency (response ready when user stops)
 - Natural conversation flow
 - Competitive advantage
 
 **Challenges**:
+
 - Complex state management (speculative vs confirmed)
 - Higher API costs (generate multiple times)
 - Rollback logic (if user changes mind mid-sentence)
@@ -490,23 +521,27 @@ User speaking → transcript.interim arrives
 ### Step-by-Step Evolution
 
 **Current State (MVP)**:
+
 ```
 audio.input.end (manual) → Finalize → TTS
 ```
 
 **Phase 1 Transition**:
+
 ```
 transcript.final (automatic) + 500ms debounce → TTS
 Keep audio.input.end as fallback (for explicit stop)
 ```
 
 **Phase 2 Transition**:
+
 ```
 VAD silence detection (500ms) → transcript.final → TTS
 No manual trigger needed
 ```
 
 **Phase 3 Transition**:
+
 ```
 VAD + LLM integration → Intelligent conversation orchestration
 ```
@@ -514,6 +549,7 @@ VAD + LLM integration → Intelligent conversation orchestration
 ### Backward Compatibility
 
 **All phases must support**:
+
 1. Existing WebSocket protocol (no breaking changes)
 2. Frontend compatibility (gradual UI updates)
 3. Graceful degradation (if VAD fails, fall back to manual)
@@ -521,6 +557,7 @@ VAD + LLM integration → Intelligent conversation orchestration
 ### Testing Strategy
 
 **Each phase requires**:
+
 1. Unit tests (new components)
 2. Integration tests (full pipeline)
 3. Manual QA (UX validation)
@@ -548,6 +585,7 @@ VAD + LLM integration → Intelligent conversation orchestration
 ### Automated Tests
 
 **Integration Test**:
+
 ```typescript
 // File: /vantum-backend/tests/integration/mvp-audio-pipeline.test.ts
 
@@ -579,6 +617,7 @@ describe('MVP Audio Pipeline (Manual Trigger)', () => {
 ### Environment Variables
 
 **Current MVP**:
+
 ```bash
 # .env
 DEEPGRAM_API_KEY=your_key_here   # STT service
@@ -586,6 +625,7 @@ CARTESIA_API_KEY=your_key_here   # TTS service
 ```
 
 **Future (with VAD)**:
+
 ```bash
 # .env
 VAD_SILENCE_THRESHOLD_MS=500     # Silence detection threshold
@@ -596,6 +636,7 @@ ENABLE_AUTOMATIC_SYNTHESIS=true  # Feature flag
 ### Feature Flags
 
 **Gradual Rollout Strategy**:
+
 ```typescript
 // Feature flag: Enable automatic synthesis
 const ENABLE_AUTO_SYNTHESIS = process.env.ENABLE_AUTOMATIC_SYNTHESIS === 'true';
@@ -616,6 +657,7 @@ if (ENABLE_AUTO_SYNTHESIS) {
 ### MVP Performance (Current)
 
 **Latency**:
+
 - STT transcription: 50-200ms (Deepgram)
 - Manual trigger: 0ms (user action, instant)
 - TTS synthesis: 800ms-1s (Cartesia first chunk)
@@ -623,6 +665,7 @@ if (ENABLE_AUTO_SYNTHESIS) {
 - **Total**: ~1-1.5s from user stops to audio playback
 
 **Memory**:
+
 - No audio buffering: Lower memory footprint
 - STT session: ~200KB per session
 - TTS session: ~200KB per session
@@ -631,11 +674,13 @@ if (ENABLE_AUTO_SYNTHESIS) {
 ### Future Performance (with VAD)
 
 **Added Latency**:
+
 - VAD detection: 10-50ms (depending on implementation)
 - Debounce wait: 500ms (configurable)
 - **Total**: +500-550ms (acceptable for UX)
 
 **Added Memory**:
+
 - VAD buffer: ~50KB per session
 - Debounce buffer: ~10KB per session
 - **Total**: +60KB per session (minimal)
@@ -645,16 +690,19 @@ if (ENABLE_AUTO_SYNTHESIS) {
 ## Related Documentation
 
 ### Core Architecture
+
 - [Architecture Documentation](./architecture.md) - System architecture overview
 - [WebSocket Protocol](../protocol/websocket-protocol.md) - Complete protocol specification
 - [Data Models](./data-models.md) - Session and state models
 
 ### Services
+
 - [STT Service Documentation](../modules/stt/api.md) - Deepgram STT integration
 - [TTS Service Documentation](../services/tts-service.md) - Cartesia TTS integration
 - [Audio Resampling](../audio/audio-resampling.md) - Audio format conversion
 
 ### Implementation
+
 - [Implementation Plan](../development/implementation-plan.md) - Development roadmap
 - [Technical Debt](../development/technical-debt.md) - Known limitations
 
@@ -662,28 +710,29 @@ if (ENABLE_AUTO_SYNTHESIS) {
 
 ## Summary
 
-**MVP Status**: ✅ IMPLEMENTED and WORKING
+**Pipeline Status**: ✅ FULLY IMPLEMENTED and PRODUCTION READY
 
 **Current Behavior**:
-- Manual "Stop recording" trigger for TTS synthesis
-- No audio echo (removed for cleaner pipeline)
-- Real-time STT transcription during recording
-- Single TTS response per recording session
 
-**Future Roadmap** (4 phases):
-1. **Phase 1**: Automatic synthesis on transcript.final (Low complexity, 1-2 days)
-2. **Phase 2**: VAD-based silence detection (Medium complexity, 2-3 days)
-3. **Phase 3**: Debouncing for partial transcripts (Low complexity, 1 day)
-4. **Phase 4**: Interruption handling (High complexity, 3-4 days)
-5. **Phase 5**: Speculative generation (Very high complexity, 1-2 weeks)
+- Manual "Stop recording" trigger initiates STT → LLM → TTS pipeline
+- STT: Real-time Deepgram transcription, accumulates full transcript
+- LLM: OpenAI GPT-4.1 streaming with conversation context, semantic `||BREAK||` chunking
+- TTS: Cartesia synthesis per chunk, sequential audio playback to client
+- No audio echo — client hears only AI-synthesized voice
 
-**Migration Strategy**: Gradual feature flag rollout, backward compatible, extensive testing
+**Future Roadmap**:
+
+1. **Phase 2**: Automatic trigger on VAD silence (no manual "Stop" button)
+2. **Phase 2**: Debouncing for partial transcripts (handle natural speech pauses)
+3. **Phase 3**: Interruption handling (cancel TTS if user speaks mid-response)
+4. **Phase 3**: Speculative generation for near-zero latency
 
 **Developer Notes**:
-- MVP validates entire audio pipeline (STT → TTS)
-- Manual control simplifies debugging and testing
-- Clear path from manual → automatic → intelligent
-- Each phase builds on previous (incremental enhancement)
+
+- Full AI pipeline (STT → LLM → TTS) validated end-to-end
+- Manual trigger simplifies testing and provides predictable UX
+- Clear path from manual trigger → automatic VAD → intelligent interruptions
+- Each future phase builds on the existing pipeline incrementally
 
 ---
 

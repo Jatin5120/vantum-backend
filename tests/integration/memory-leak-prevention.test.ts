@@ -10,6 +10,13 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import OpenAI from 'openai';
+import { llmController } from '@/modules/llm/controllers/llm.controller';
+import { llmService } from '@/modules/llm/services/llm.service';
+import { llmSessionService } from '@/modules/llm/services/llm-session.service';
+import { TTSService } from '@/modules/tts/services/tts.service';
+import { ttsSessionService } from '@/modules/tts/services/tts-session.service';
+import { ttsController } from '@/modules/tts/controllers';
 
 // Mock OpenAI module properly
 vi.mock('openai', () => {
@@ -38,7 +45,7 @@ const createMockAudioSource = () => {
       activeListeners++;
 
       if (event === 'close') {
-        setImmediate(() => handler());
+        setTimeout(() => handler(), 0);
       }
     }),
     off: vi.fn(() => {
@@ -94,6 +101,13 @@ const mockWebSocket = {
 vi.mock('@/modules/socket/services', () => ({
   websocketService: {
     getWebSocket: vi.fn(() => mockWebSocket),
+  },
+  sessionService: {
+    getSessionBySessionId: vi.fn((sessionId: string) => ({
+      id: sessionId,
+      sessionId,
+      metadata: { voiceId: 'test-voice-id' },
+    })),
   },
 }));
 
@@ -247,6 +261,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       const sessionId = 'tts-volume-test';
 
       await ttsController.initializeSession(sessionId, {
+        sessionId,
         connectionId: 'conn-volume',
         voiceId: 'test-voice',
         language: 'en',
@@ -283,6 +298,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       const sessionId = 'tts-stability-test';
 
       await ttsController.initializeSession(sessionId, {
+        sessionId,
         connectionId: 'conn-stability',
         voiceId: 'test-voice',
         language: 'en',
@@ -309,6 +325,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       const sessionId = 'tts-rapid-test';
 
       await ttsController.initializeSession(sessionId, {
+        sessionId,
         connectionId: 'conn-rapid',
         voiceId: 'test-voice',
         language: 'en',
@@ -339,6 +356,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       // Initialize both services
       await llmController.initializeSession(sessionId);
       await ttsController.initializeSession(sessionId, {
+        sessionId,
         connectionId: 'conn-pipeline',
         voiceId: 'test-voice',
         language: 'en',
@@ -375,6 +393,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       for (const id of sessionIds) {
         await llmController.initializeSession(id);
         await ttsController.initializeSession(id, {
+          sessionId: id,
           connectionId: `conn-${id}`,
           voiceId: 'test-voice',
           language: 'en',
@@ -413,6 +432,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
 
       await llmController.initializeSession(sessionId);
       await ttsController.initializeSession(sessionId, {
+        sessionId,
         connectionId: 'conn-error',
         voiceId: 'test-voice',
         language: 'en',
@@ -449,6 +469,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       // Initialize
       await llmController.initializeSession(sessionId);
       await ttsController.initializeSession(sessionId, {
+        sessionId,
         connectionId: 'conn-lifecycle',
         voiceId: 'test-voice',
         language: 'en',
@@ -464,7 +485,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       await llmController.generateResponse(sessionId, 'test message');
       await ttsController.synthesize(sessionId, 'test audio');
 
-      const beforeListeners = activeListeners;
+      const _beforeListeners = activeListeners;
 
       // End sessions
       await llmController.endSession(sessionId);
@@ -483,6 +504,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
         // Create
         await llmController.initializeSession(sessionId);
         await ttsController.initializeSession(sessionId, {
+          sessionId,
           connectionId: `conn-${i}`,
           voiceId: 'test-voice',
           language: 'en',
@@ -520,6 +542,7 @@ describe('Memory Leak Prevention - Integration Tests', () => {
       for (const id of sessionIds) {
         await llmController.initializeSession(id);
         await ttsController.initializeSession(id, {
+          sessionId: id,
           connectionId: `conn-${id}`,
           voiceId: 'test-voice',
           language: 'en',

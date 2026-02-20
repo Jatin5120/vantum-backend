@@ -1,12 +1,13 @@
 # Cartesia TTS Integration Guide
 
-**Version**: 1.2.0
-**Last Updated**: January 4, 2026
+**Version**: 1.3.0
+**Last Updated**: January 28, 2026
 **Status**: Active (Complete)
 
 **🔒 AUTHORITATIVE REFERENCE**: This document is the official guide for Cartesia integration in Vantum.
 
 **Naming Convention**: USE CAMELCASE
+
 - TypeScript SDK API: `modelId`, `outputFormat`, `sampleRate` ✅
 - Wire Protocol: `model_id`, `output_format`, `sample_rate` (automatic SDK conversion)
 
@@ -28,10 +29,11 @@ This document provides comprehensive guidance for integrating **Cartesia's real-
 2. [Configuration](#configuration)
 3. [WebSocket Connection](#websocket-connection)
 4. [Audio Format](#audio-format)
-5. [Error Handling](#error-handling)
-6. [Rate Limits](#rate-limits)
-7. [Troubleshooting](#troubleshooting)
-8. [Best Practices](#best-practices)
+5. [SSML Support](#ssml-support)
+6. [Error Handling](#error-handling)
+7. [Rate Limits](#rate-limits)
+8. [Troubleshooting](#troubleshooting)
+9. [Best Practices](#best-practices)
 
 ---
 
@@ -49,11 +51,13 @@ This document provides comprehensive guidance for integrating **Cartesia's real-
 Add API key to your environment configuration:
 
 **Development (.env.development)**:
+
 ```bash
 CARTESIA_API_KEY=sk-your-development-key-here
 ```
 
 **Production (.env.production)**:
+
 ```bash
 CARTESIA_API_KEY=sk-your-production-key-here
 ```
@@ -82,9 +86,11 @@ const cartesia = new Cartesia({ apiKey });
 ### Environment Variables
 
 **Required**:
+
 - `CARTESIA_API_KEY` (string): Your Cartesia API key
 
 **Optional** (uses defaults from TTS config):
+
 - `TTS_SAMPLE_RATE` (number): Sample rate (default: 16000 Hz)
 - `TTS_MODEL` (string): Model ID (default: "sonic-english")
 - `TTS_LANGUAGE` (string): Language code (default: "en")
@@ -110,10 +116,10 @@ export const TTS_CONFIG = {
 
 **Vantum Curated Voices** (Production-Ready):
 
-| Voice | Gender | ID | Description |
-|-------|--------|-----|-------------|
-| **Kyle** (Default) | Male | `c961b81c-a935-4c17-bfb3-ba2239de8c2f` | Approachable Friend - Natural, friendly male voice |
-| **Tessa** | Female | `6ccbfb76-1fc6-48f7-b71d-91ac6298247b` | Kind Companion - Warm, professional female voice |
+| Voice              | Gender | ID                                     | Description                                        |
+| ------------------ | ------ | -------------------------------------- | -------------------------------------------------- |
+| **Kyle** (Default) | Male   | `c961b81c-a935-4c17-bfb3-ba2239de8c2f` | Approachable Friend - Natural, friendly male voice |
+| **Tessa**          | Female | `6ccbfb76-1fc6-48f7-b71d-91ac6298247b` | Kind Companion - Warm, professional female voice   |
 
 **Current Default**: Kyle (male voice)
 
@@ -123,10 +129,10 @@ To change the default voice, update `cartesia.config.ts`:
 
 ```typescript
 // Use Kyle (male - default)
-voiceId: 'c961b81c-a935-4c17-bfb3-ba2239de8c2f'
+voiceId: 'c961b81c-a935-4c17-bfb3-ba2239de8c2f';
 
 // OR use Tessa (female)
-voiceId: '6ccbfb76-1fc6-48f7-b71d-91ac6298247b'
+voiceId: '6ccbfb76-1fc6-48f7-b71d-91ac6298247b';
 ```
 
 **Runtime Voice Override**:
@@ -140,6 +146,7 @@ await ttsService.synthesizeText(sessionId, text, {
 ```
 
 **Voice Selection Rationale**:
+
 - Both voices excel at emotional expression
 - Natural conversational tone suitable for cold calls
 - Clear pronunciation and professional delivery
@@ -233,11 +240,13 @@ clearInterval(keepAliveInterval);
 Automatic reconnection is implemented for transient failures:
 
 **Triggers**:
+
 - Unexpected WebSocket close
 - Network errors
 - Retryable errors (5xx)
 
 **Behavior**:
+
 1. Mark session as reconnecting
 2. Buffer texts received during downtime (max 1MB)
 3. Attempt reconnection to Cartesia
@@ -245,6 +254,7 @@ Automatic reconnection is implemented for transient failures:
 5. On failure: Drop buffers, session remains disconnected
 
 **Buffer Limits**:
+
 - Max buffer size: 1MB
 - Texts exceeding buffer are dropped with warning
 
@@ -270,6 +280,7 @@ Cartesia accepts text input:
 Cartesia outputs PCM audio:
 
 **Audio Specifications**:
+
 - **Format**: PCM (Pulse Code Modulation)
 - **Encoding**: `pcm_s16le` (16-bit signed little-endian)
 - **Sample Rate**: 16000 Hz (16kHz)
@@ -277,6 +288,7 @@ Cartesia outputs PCM audio:
 - **Bit Depth**: 16 bits per sample
 
 **Example Audio Chunk**:
+
 ```typescript
 {
   type: 'chunk',
@@ -296,11 +308,164 @@ import { audioResampler } from '@/modules/audio/services/audio-resampler.service
 const resampled48kHz = await audioResampler.resample(
   audio16kHz,
   16000, // source sample rate
-  48000  // target sample rate
+  48000 // target sample rate
 );
 ```
 
 **Resampling Performance**: <1ms per 100ms audio chunk (negligible latency)
+
+---
+
+## SSML Support
+
+**Status**: ✅ **ENABLED** (January 28, 2026)
+
+### Overview
+
+Cartesia Sonic-3 models support **SSML-like markup tags** for controlling emotion, pauses, speed, and volume directly in the text. This enables highly expressive, natural-sounding voice responses for cold outreach calls.
+
+### Available SSML Tags
+
+#### 1. Emotion Tags
+
+Control emotional expression in speech:
+
+```typescript
+<emotion value="excited"/>I have great news!</emotion>
+<emotion value="curious"/>How are you doing today?</emotion>
+<emotion value="content"/>I understand your concern.</emotion>
+```
+
+**Supported Emotions** (60+ total):
+
+- `excited` - High energy, enthusiasm
+- `curious` - Inquisitive, interested
+- `content` - Satisfied, understanding
+- `sad` - Empathetic, somber
+- `angry` - Frustrated, upset (use sparingly)
+- `surprised` - Unexpected, amazed
+
+**Best Practices**:
+
+- Apply at sentence/phrase boundaries, not mid-sentence
+- Don't overuse (sounds unnatural)
+- Best with emotive voices (Kyle, Tessa)
+- Always close with `</emotion>`
+
+#### 2. Break/Pause Tags
+
+Insert pauses for natural conversation rhythm:
+
+```typescript
+Hello. <break time="500ms"/> How can I help you?
+Great question! <break time="800ms"/> Let me explain.
+```
+
+**Guidelines**:
+
+- After questions: 400-600ms
+- Topic transitions: 800ms-1s
+- Thinking pauses: 300-500ms
+- Between sentences: 200-400ms
+
+**Units**: `ms` (milliseconds) or `s` (seconds)
+
+#### 3. Speed Control
+
+Adjust speaking rate:
+
+```typescript
+<speed ratio="1.2"/>I speak faster when excited!</speed>
+<speed ratio="0.8"/>Slow down for emphasis.</speed>
+```
+
+**Range**: 0.6 to 1.5 (default: 1.0)
+
+**Use Cases**:
+
+- Important points: 0.8-0.9 (slower)
+- Excitement: 1.1-1.2 (faster)
+- Default: 1.0
+
+#### 4. Volume Control
+
+Adjust loudness:
+
+```typescript
+<volume ratio="0.8"/>I'll speak softly now.</volume>
+<volume ratio="1.3"/>Important announcement!</volume>
+```
+
+**Range**: 0.5 to 2.0 (default: 1.0)
+
+### Integration with ||BREAK|| Markers
+
+Vantum uses **both** `||BREAK||` and SSML tags for different purposes:
+
+| Feature                | Purpose                          | Example                                             |
+| ---------------------- | -------------------------------- | --------------------------------------------------- | --- | --- | ---------------------------------------------- | -------- | --- | ----- | --- | -------------- |
+| `                      |                                  | BREAK                                               |     | `   | Semantic chunk boundaries (LLM → TTS pipeline) | `"Hello. |     | BREAK |     | How are you?"` |
+| `<break time="Xms"/>`  | Pauses within chunks (TTS audio) | `"Hello. <break time='500ms'/> How are you?"`       |
+| `<emotion value="X"/>` | Emotional expression             | `"<emotion value='excited'/>Great news!</emotion>"` |
+
+**Combined Example**:
+
+```typescript
+"<emotion value='content'/>Hi, this is Alex from Vantum. <break time='500ms'/> <emotion value='curious'/>Do you have a moment?||BREAK||<emotion value='excited'/>I have exciting news about your cold outreach!</emotion>";
+```
+
+### Character Limits
+
+SSML tags **count toward** Cartesia's 5,000 character limit per request.
+
+**Example**:
+
+```typescript
+text = "<emotion value='excited'/>Hello!</emotion>"; // 53 characters (includes markup)
+```
+
+**Tip**: Minimize spaces around tags to save characters.
+
+### Performance Impact
+
+- **Latency**: Negligible (~0ms overhead, parsing is Cartesia-side)
+- **Token Cost**: SSML markup counts as characters
+- **Memory**: ~30-50 bytes per emotion tag
+
+### Limitations
+
+- **Emotion changes**: Apply at natural boundaries, not mid-sentence
+- **Token streaming**: Don't use token-by-token streaming with SSML (buffer complete sentences)
+- **Validation**: Malformed SSML may cause synthesis errors
+
+### Testing SSML
+
+**Manual Test**:
+
+```bash
+# Test emotion tag
+curl -X POST http://localhost:3001/api/tts/synthesize \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sessionId": "test-session",
+    "text": "<emotion value=\"excited\"/>Hello from Vantum!</emotion>"
+  }'
+```
+
+### System Prompt Integration
+
+The LLM system prompt in `/src/modules/llm/config/prompts.config.ts` now includes comprehensive SSML instructions. The LLM automatically generates emotional, expressive responses for cold outreach calls.
+
+**Example LLM Output**:
+
+```
+<emotion value='content'/>Hi, this is Alex from Vantum. <break time='500ms'/> <emotion value='curious'/>Do you have a moment to chat?||BREAK||<emotion value='excited'/>I have exciting news about your cold outreach results!</emotion>
+```
+
+### References
+
+- [Cartesia SSML Tags Documentation](https://docs.cartesia.ai/build-with-cartesia/sonic-3/ssml-tags)
+- [Cartesia Emotion Control Guide](https://docs.cartesia.ai/2024-11-13/build-with-cartesia/capability-guides/control-speed-and-emotion)
 
 ---
 
@@ -312,13 +477,13 @@ Defined in `TTSErrorType` enum:
 
 ```typescript
 enum TTSErrorType {
-  NETWORK = 'network',           // Network connectivity issue
-  TIMEOUT = 'timeout',           // Request timeout
-  RATE_LIMIT = 'rate_limit',     // Rate limit hit
-  AUTH = 'auth',                 // Invalid API key
+  NETWORK = 'network', // Network connectivity issue
+  TIMEOUT = 'timeout', // Request timeout
+  RATE_LIMIT = 'rate_limit', // Rate limit hit
+  AUTH = 'auth', // Invalid API key
   INVALID_REQUEST = 'invalid_request', // Bad request
-  FATAL = 'fatal',               // Unrecoverable error
-  UNKNOWN = 'unknown',           // Unknown error
+  FATAL = 'fatal', // Unrecoverable error
+  UNKNOWN = 'unknown', // Unknown error
 }
 ```
 
@@ -367,11 +532,7 @@ function classifyCartesiaError(error: any): {
 For retryable errors, implement exponential backoff:
 
 ```typescript
-async function sendWithRetry(
-  websocket: WebSocket,
-  data: any,
-  maxRetries = 3
-): Promise<void> {
+async function sendWithRetry(websocket: WebSocket, data: any, maxRetries = 3): Promise<void> {
   let retries = 0;
   const backoffMs = [1000, 2000, 4000]; // 1s, 2s, 4s
 
@@ -467,6 +628,7 @@ Cartesia enforces rate limits:
 - **Characters per request**: 5000 max
 
 **Response when rate limited**:
+
 - HTTP Status: `429 Too Many Requests`
 - Header: `Retry-After: <seconds>`
 
@@ -498,11 +660,13 @@ async function handleRateLimit(error: any): Promise<void> {
 **Symptoms**: WebSocket connection never opens, timeout error.
 
 **Possible Causes**:
+
 1. Invalid API key
 2. Network connectivity issue
 3. Firewall blocking WebSocket
 
 **Solution**:
+
 - Verify API key is correct
 - Check network connectivity
 - Ensure WebSocket port is open (usually 443)
@@ -514,11 +678,13 @@ async function handleRateLimit(error: any): Promise<void> {
 **Symptoms**: Audio plays but sounds distorted or choppy.
 
 **Possible Causes**:
+
 1. Wrong sample rate (not resampled to 48kHz)
 2. Incorrect audio format (not PCM s16le)
 3. Audio chunks out of order
 
 **Solution**:
+
 - Verify resampling is applied (16kHz → 48kHz)
 - Check audio format matches browser expectations
 - Ensure chunks are queued by `utteranceId`
@@ -530,11 +696,13 @@ async function handleRateLimit(error: any): Promise<void> {
 **Symptoms**: Delay between text submission and audio playback.
 
 **Possible Causes**:
+
 1. Network latency to Cartesia API
 2. Resampling bottleneck
 3. Too many concurrent sessions
 
 **Solution**:
+
 - Monitor network latency
 - Check resampling performance
 - Reduce concurrent sessions if needed
@@ -546,11 +714,13 @@ async function handleRateLimit(error: any): Promise<void> {
 **Symptoms**: WebSocket frequently closes unexpectedly.
 
 **Possible Causes**:
+
 1. Idle timeout (no keepalive)
 2. Network instability
 3. Cartesia API issues
 
 **Solution**:
+
 - Ensure keepalive mechanism is active
 - Check network stability
 - Monitor Cartesia API status
@@ -562,6 +732,7 @@ async function handleRateLimit(error: any): Promise<void> {
 ### 1. Use SDK, Not Raw WebSocket
 
 Always use `@cartesia/cartesia-js` SDK:
+
 - Handles protocol automatically
 - Built-in error handling
 - TypeScript support
@@ -572,6 +743,7 @@ Always use `@cartesia/cartesia-js` SDK:
 ### 2. Persistent Connections
 
 Maintain one connection per session:
+
 - Create connection on session start
 - Reuse for all synthesis requests
 - Close on session end
@@ -579,12 +751,14 @@ Maintain one connection per session:
 ### 3. Implement KeepAlive
 
 Send keepalive pings every 30 seconds:
+
 - Prevents idle timeouts
 - Detects dead connections early
 
 ### 4. Handle Reconnection
 
 Implement automatic reconnection:
+
 - Buffer texts during downtime
 - Flush on reconnect success
 - Drop buffers if reconnect fails
@@ -592,12 +766,15 @@ Implement automatic reconnection:
 ### 5. Validate Text Input
 
 Before sending to Cartesia:
+
 - Max 5000 characters (truncate if longer)
 - Non-empty text (skip if empty)
+- SSML tags count toward limit
 
 ### 6. Monitor Metrics
 
 Track key metrics:
+
 - Active sessions
 - Error rate
 - Reconnection frequency
@@ -606,6 +783,7 @@ Track key metrics:
 ### 7. Implement Circuit Breaker
 
 Prevent cascading failures:
+
 - Stop calling API after N failures (e.g., 5)
 - Wait cooldown period (e.g., 60s)
 - Attempt recovery after cooldown
@@ -619,10 +797,11 @@ Prevent cascading failures:
 - **Audio Resampler**: `/docs/services/audio-resampler-service.md`
 - **Error Handling**: `/docs/architecture/error-handling.md`
 - **SDK Decision**: `/docs/architecture/cartesia-sdk-decision.md` (camelCase vs snake_case)
+- **LLM Prompts**: `/src/modules/llm/config/prompts.config.ts` (SSML instructions)
 
 ---
 
-**Last Updated**: January 4, 2026
-**Version**: 1.2.0
+**Last Updated**: January 28, 2026
+**Version**: 1.3.0
 **Cartesia SDK Version**: @cartesia/cartesia-js 2.2.9
 **Maintained By**: Backend Development Team

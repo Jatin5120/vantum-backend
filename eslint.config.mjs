@@ -24,6 +24,8 @@ export default [
         clearTimeout: 'readonly',
         setInterval: 'readonly',
         clearInterval: 'readonly',
+        setImmediate: 'readonly',
+        clearImmediate: 'readonly',
       },
     },
     plugins: {
@@ -31,13 +33,18 @@ export default [
       'no-secrets': noSecrets,
     },
     rules: {
+      // Disable base rule - @typescript-eslint/no-unused-vars replaces it for TS files
+      // The base rule cannot understand TypeScript constructs (type-only params, etc.)
+      'no-unused-vars': 'off',
+
       // TypeScript specific rules
       '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unused-vars': [
         'error',
         {
           argsIgnorePattern: '^_',
-          varsIgnorePattern: '^_'
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_'
         }
       ],
       '@typescript-eslint/explicit-function-return-type': 'off',

@@ -1,7 +1,7 @@
 # Architecture Documentation
 
-**Version**: 1.3.0
-**Last Updated**: 2026-01-04
+**Version**: 1.4.0
+**Last Updated**: 2026-02-20
 **Status**: Active
 
 > **Note**: For detailed information about the folder structure and module organization, see [Folder Structure Documentation](../code/folder-structure.md).
@@ -55,7 +55,7 @@ At a high level:
 │             ▼ 16kHz PCM                            │
 │  ┌──────────────────────────────────┐             │
 │  │   STT Module (modules/stt)       │             │
-│  │   ✅ IMPLEMENTED (Layer 1)       │             │
+│  │   ✅ COMPLETE (Layer 1)          │             │
 │  │   - Deepgram WebSocket client    │             │
 │  │   - Real-time transcription      │             │
 │  │   - Session management           │             │
@@ -65,34 +65,42 @@ At a high level:
 │             │                                      │
 │             ▼ Transcripts                          │
 │  ┌──────────────────────────────────┐             │
+│  │  LLM Module (modules/llm)        │             │
+│  │  ✅ COMPLETE (Layer 2)           │             │
+│  │  - OpenAI GPT-4.1 streaming      │             │
+│  │  - Semantic chunking (||BREAK||) │             │
+│  │  - Conversation context mgmt     │             │
+│  │  - Error classification & retry  │             │
+│  │  - 90%+ test coverage            │             │
+│  └──────────┬───────────────────────┘             │
+│             │                                      │
+│             ▼ Semantic text chunks                 │
+│  ┌──────────────────────────────────┐             │
 │  │  TTS Module (modules/tts)        │             │
-│  │  ✅ IMPLEMENTED (Layer 2 - MVP)  │             │
+│  │  ✅ COMPLETE (Layer 2)           │             │
 │  │  - Cartesia WebSocket client     │             │
 │  │  - Real-time TTS synthesis       │             │
-│  │  - Manual trigger (audio.end)    │             │
-│  │  - Session management            │             │
-│  └──────────────────────────────────┘             │
-│                                                     │
-│  ┌──────────────────────────────────┐             │
-│  │  Future LLM Service              │             │
-│  │  📝 PLANNED (Layer 2)            │             │
-│  │  - OpenAI GPT-4 (LLM)            │             │
-│  │  - Conversation orchestration    │             │
+│  │  - Sequential audio playback     │             │
+│  │  - State machine + cleanup       │             │
+│  │  - 90%+ test coverage            │             │
 │  └──────────────────────────────────┘             │
 └─────────────────────────────────────────────────────┘
 ```
 
 **Implementation Status**:
+
 - ✅ **Layer 1 COMPLETE** (Grade A - 95.25%): Socket layer, audio resampling, STT integration
   - Socket infrastructure: Production-ready
   - Audio resampling: Production-ready with 85%+ test coverage
   - STT integration: Production-ready with 85%+ test coverage
   - 20+ test files, comprehensive integration tests
-- ✅ **Layer 2 PARTIAL** (MVP Implementation): TTS service (Cartesia) with manual trigger
-  - TTS integration: Working, manual "Stop recording" trigger
-  - Audio echo: REMOVED (simplified pipeline)
-  - LLM service: NOT STARTED (planned)
-  - Conversation orchestration: NOT STARTED (planned)
+- ✅ **Layer 2 COMPLETE** (Grade A - 95/100): Full AI pipeline — STT → LLM → TTS
+  - STT integration: Complete (Deepgram, 85%+ coverage)
+  - LLM integration: Complete (OpenAI GPT-4.1, 90%+ coverage, semantic streaming)
+  - TTS integration: Complete (Cartesia, 90%+ coverage, state machine)
+  - Full pipeline: Complete (audio.end → transcript → LLM → TTS → client)
+  - Memory leak prevention: Complete (P0/P1/P2 fixes, 42+ regression tests)
+  - Overall test coverage: 96.5%+ (949+ tests, 33 test files)
 - ⏳ **Layer 3 FUTURE**: Telephony gateway (Twilio), authentication, database integration
 
 ### Module Responsibilities
@@ -126,6 +134,7 @@ The `audio` module (`src/modules/audio`) owns:
 - **Production-ready**: 85%+ test coverage, comprehensive unit and integration tests
 
 **Key Design Decisions**:
+
 - Stateless service (no session state, follows Handler + Service pattern)
 - Graceful degradation (returns original audio on error)
 - Passthrough optimization (skips resampling if source == target rate)
@@ -148,6 +157,7 @@ The `stt` module (`src/modules/stt`) provides:
 - **Production-ready**: 85%+ test coverage with comprehensive integration tests
 
 **Key Features**:
+
 - Session-level persistent Deepgram connections (ADR-003)
 - Transparent mid-stream reconnection (user-invisible)
 - Voice Activity Detection (VAD) for speech start/end
@@ -157,32 +167,48 @@ The `stt` module (`src/modules/stt`) provides:
 
 See [Deepgram STT Integration Design](../design/deepgram-stt-integration-design.md) for complete specification.
 
+#### LLM Module
+
+**Status**: ✅ **COMPLETE (Layer 2)**
+
+The `llm` module (`src/modules/llm`) provides:
+
+- **OpenAI GPT-4.1 integration**: Streaming conversation AI
+- **Semantic chunking**: `||BREAK||` marker extraction for progressive TTS delivery
+- **Conversation context management**: Full session history, auto-prune at 50 messages
+- **Request queueing**: Per-session queue (max 10), never rejects mid-conversation
+- **Error classification**: AUTH, RATE_LIMIT, NETWORK, FATAL with intelligent retry decisions
+- **3-tier fallback messages**: Maintains conversation coherence on failures
+- **Session cleanup**: Existence checks prevent unnecessary cleanup (P1-7 fix)
+- **Production-ready**: 90%+ test coverage, P0 memory leak fixes validated
+
+**Pipeline Position**: Transcript arrives from STT → LLM generates response → Semantic chunks sent to TTS
+
+See [OpenAI Integration Guide](../integrations/openai.md) for setup and operational details.
+
 #### TTS Module
 
-**Status**: ✅ **IMPLEMENTED (Layer 2 - MVP)**
+**Status**: ✅ **COMPLETE (Layer 2)**
 
 The `tts` module (`src/modules/tts`) provides:
 
 - **Cartesia integration**: WebSocket connection to Cartesia API
 - **Real-time TTS synthesis**: text → audio conversion with streaming
-- **Manual trigger**: TTS synthesis on "Stop recording" button (audio.input.end)
+- **Sequential audio playback**: Chunks queued with duration-based delays (no overlap)
+- **State machine**: IDLE → CONNECTING → GENERATING → PLAYING → CLOSED lifecycle
 - **Session management**: 1:1 mapping between Vantum sessions and Cartesia connections
 - **Audio resampling**: 16kHz (Cartesia) → 48kHz (browser) via AudioResamplerService
-- **Error handling**: Retry strategy with reconnection support
+- **Event listener cleanup**: finally-block cleanup prevents listener accumulation (P0-2 fix)
+- **Production-ready**: 90%+ test coverage
 
-**MVP Behavior** (Current):
-- TTS triggers when user clicks "Stop recording" (manual, explicit)
-- No automatic synthesis during recording
-- No audio echo (removed for cleaner pipeline)
-- Single TTS response per recording session
+**Pipeline Position**: Receives semantic text chunks from LLM → synthesizes → streams audio to client
 
 **Future Enhancements** (Planned):
-- Automatic synthesis on transcript.final (VAD-based trigger)
-- Debouncing for partial transcripts
-- Interruption handling (cancel TTS on user speech)
-- Speculative generation (LLM + TTS pre-generation)
 
-See [MVP Audio Pipeline Documentation](./mvp-audio-pipeline.md) for complete MVP flow and [TTS Service Documentation](../services/tts-service.md) for API details.
+- Interruption handling (cancel TTS if user speaks during response)
+- Speculative generation (start TTS before user finishes speaking)
+
+See [TTS Service Documentation](../services/tts-service.md) for API details.
 
 ## Communication Flow
 
@@ -197,67 +223,56 @@ Client → uses sessionId in all subsequent messages
 
 **Important**: Session ID is **always generated by the server**, not the client. See [Session ID Generation](../protocol/websocket-protocol.md#session-id-generation) for details.
 
-### 2. Current Audio Flow (MVP - Implemented)
+### 2. Current Audio Flow (Full AI Pipeline — Implemented)
 
-The current implementation provides **complete STT → TTS pipeline with manual trigger**:
+The current implementation provides a **complete STT → LLM → TTS pipeline** triggered on `audio.end`:
 
 1. Client connects via WebSocket (browser in dev, Twilio in production).
 2. Server sends `connection.ack` with server-generated `sessionId`.
-3. Client sends `AUDIO_START` (MessagePack) with audio configuration (sampling rate, language, etc.) using the sessionId from step 2.
+3. Client sends `AUDIO_START` (MessagePack) with audio configuration (sampling rate, language, voiceId) using the sessionId from step 2.
 4. Server:
-   - Validates payload.
-   - Registers the WebSocket for the session.
-   - Creates Deepgram WebSocket connection.
-   - Creates Cartesia WebSocket connection.
-   - Updates session state to `ACTIVE`.
-   - Sends an ACK back to the client.
-5. Client streams `AUDIO_CHUNK` events with raw PCM audio in the payload.
+   - Validates payload, registers the WebSocket for the session.
+   - Creates Deepgram WebSocket connection (STT).
+   - Creates Cartesia WebSocket connection (TTS).
+   - Initializes LLM session (conversation context).
+   - Updates session state to `ACTIVE`. Sends ACK back to client.
+5. Client streams `AUDIO_CHUNK` events with raw PCM audio.
 6. Server:
-   - Resamples audio (48kHz/8kHz → 16kHz).
-   - Forwards to Deepgram WebSocket (no buffering).
-   - Receives interim and final transcripts.
-   - Sends transcripts to client via WebSocket.
-7. Client sends `AUDIO_END` when user clicks "Stop recording" (manual trigger).
+   - Resamples audio (48kHz/8kHz → 16kHz). Forwards to Deepgram (no buffering).
+   - Receives interim and final transcripts. Sends to client via WebSocket.
+7. Client sends `AUDIO_END` (user stops speaking / "Stop recording").
 8. Server:
    - Finalizes Deepgram transcript (accumulated text).
-   - Triggers TTS synthesis with accumulated transcript.
-   - Cartesia generates audio chunks (16kHz).
-   - Resamples audio (16kHz → 48kHz).
-   - Sends audio chunks to client via WebSocket.
-9. Client plays ONLY Cartesia TTS audio (no echo).
-
-**Current State**: Complete bidirectional audio streaming with real-time transcription and TTS synthesis (manual trigger).
+   - Sends transcript to LLM (`llmController.generateResponse()`).
+   - LLM streams response, `LLMStreamingService` extracts semantic chunks via `||BREAK||` markers.
+   - Each chunk is sent to TTS (`ttsController.synthesize()`).
+   - Cartesia generates audio (16kHz) → resampled (48kHz) → sent to client as `RESPONSE_CHUNK` events.
+9. Client plays ONLY Cartesia-synthesized audio (no echo of original).
 
 **Key Points**:
-- ✅ Audio echo REMOVED (cleaner pipeline)
-- ✅ TTS triggers on manual "Stop recording" button (MVP)
-- ✅ Client hears ONLY Cartesia voice (no original audio)
-- 📝 Automatic triggers (VAD, auto-synthesis) planned for future
 
-See [MVP Audio Pipeline Documentation](./mvp-audio-pipeline.md) for detailed flow diagrams and future enhancement roadmap.
+- ✅ Full STT → LLM → TTS pipeline implemented
+- ✅ Semantic streaming: LLM responses split at `||BREAK||` for low-latency TTS delivery
+- ✅ WebSocket stays open after `AUDIO_END` (client receives TTS audio chunks asynchronously)
+- ✅ Client hears only Cartesia voice (no original audio echoed)
 
-### 3. Future End-to-End Voice Flow (Layer 2 - Planned)
+See [MVP Audio Pipeline Documentation](./mvp-audio-pipeline.md) for detailed flow diagrams.
 
-Once LLM service and automatic triggers are implemented, the full flow will look like:
+### 3. Future Enhancements (Layer 3+)
+
+The pipeline is complete. Remaining enhancements are UX/capability improvements:
 
 ```
-Client → AUDIO_START/CHUNK (MessagePack) → Socket Module
-Socket Module → resample audio → STT Service ✅ IMPLEMENTED
-STT Service → transcripts → VAD Detection 📝 PLANNED (automatic trigger)
-VAD Detection → silence detected → LLM Service 📝 PLANNED
-LLM Service → response text → TTS Service ✅ IMPLEMENTED (MVP)
-TTS Service → audio chunks → Socket Module
-Socket Module → resample audio → RESPONSE_* events → Client
-Client → play audio
+Current:  audio.end (manual) → STT finalize → LLM → TTS
+Future 1: VAD silence (auto)  → STT finalize → LLM → TTS
+Future 2: VAD + interruption handling (cancel TTS on user speech)
+Future 3: Speculative generation (start LLM on interim transcripts)
 ```
 
-**Enhancements Over MVP**:
-- Automatic synthesis on VAD silence detection (no manual "Stop" button)
-- LLM integration for intelligent responses (not just echo)
-- Debouncing for partial transcripts (prevent premature synthesis)
+- Automatic trigger on VAD silence (no manual "Stop" button required)
 - Interruption handling (cancel TTS if user speaks during response)
-
-The full flow and speculative generation behavior are described in more detail in [Voice Mode Implementation Reference](../reference/voice-mode-implementation.md). That doc is conceptual; **this document reflects the concrete implementation status**.
+- Debouncing for partial transcripts (handle natural speech pauses)
+- Speculative generation for near-zero latency responses
 
 ## WebSocket Events & Message Envelope
 
@@ -327,11 +342,11 @@ The exact payload shapes are defined in `@Jatin5120/vantum-shared` package and m
 - [WebSocket Protocol RFC 6455](https://datatracker.ietf.org/doc/html/rfc6455)
 - [ws GitHub Repository](https://github.com/websockets/ws)
 
-### LLM Provider: OpenAI GPT-4
+### LLM Provider: OpenAI GPT-4.1
 
-**Decision**: Use OpenAI GPT-4 for conversation intelligence.
+**Decision**: Use OpenAI GPT-4.1 for conversation intelligence.
 
-**Status**: 📝 PLANNED (Layer 2 - Not yet implemented)
+**Status**: ✅ COMPLETE (Layer 2 - Production-ready, 90%+ test coverage)
 
 **Rationale**:
 
@@ -396,37 +411,39 @@ The exact payload shapes are defined in `@Jatin5120/vantum-shared` package and m
 ### Audio Processing Pipeline (MVP)
 
 **Browser to Backend (Development)**:
+
 ```
 Browser (48kHz PCM) → WebSocket → Backend AudioHandler (48kHz)
     ↓
-AudioResamplerService (wave-resampler) ✅ IMPLEMENTED
+AudioResamplerService (wave-resampler) ✅ COMPLETE
     ↓ (downsample 48kHz → 16kHz)
-STTService (16kHz PCM) → Deepgram API ✅ IMPLEMENTED
-    ↓ (transcription)
-Transcript Events → Client ✅ IMPLEMENTED
-    ↓ (user clicks "Stop recording")
-Accumulated Transcript → TTSService ✅ IMPLEMENTED (MVP)
+STTService (16kHz PCM) → Deepgram API ✅ COMPLETE
+    ↓ (transcription, on audio.end finalize)
+Accumulated Transcript → LLMService ✅ COMPLETE
+    ↓ (streaming response with ||BREAK|| semantic chunks)
+LLMStreamingService chunks → TTSService ✅ COMPLETE
     ↓
-Cartesia API → Audio Chunks (16kHz) ✅ IMPLEMENTED
+Cartesia API → Audio Chunks (16kHz) ✅ COMPLETE
     ↓
-AudioResamplerService (16kHz → 48kHz) ✅ IMPLEMENTED
+AudioResamplerService (16kHz → 48kHz) ✅ COMPLETE
     ↓
-Client (48kHz PCM) → Audio Playback ✅ IMPLEMENTED
+Client (48kHz PCM) → Audio Playback ✅ COMPLETE
 ```
 
 **Twilio to Backend (Production - Future)**:
+
 ```
 Twilio (8kHz μ-law) → Telephony Gateway 📝 PLANNED
     ↓
-AudioResamplerService (8kHz → 16kHz) ✅ IMPLEMENTED (ready for Twilio)
+AudioResamplerService (8kHz → 16kHz) ✅ COMPLETE (ready for Twilio)
     ↓
-STTService (16kHz PCM) → Deepgram API ✅ IMPLEMENTED
+STTService (16kHz PCM) → Deepgram API ✅ COMPLETE
     ↓
-LLM Service → OpenAI GPT-4 📝 PLANNED
+LLM Service → OpenAI GPT-4.1 ✅ COMPLETE
     ↓
-TTS Service → Cartesia ✅ IMPLEMENTED (MVP)
+TTS Service → Cartesia ✅ COMPLETE
     ↓
-AudioResamplerService (16kHz → 8kHz) ✅ IMPLEMENTED (ready for Twilio)
+AudioResamplerService (16kHz → 8kHz) ✅ COMPLETE (ready for Twilio)
     ↓
 Telephony Gateway → Twilio (8kHz μ-law) 📝 PLANNED
 ```
@@ -434,16 +451,19 @@ Telephony Gateway → Twilio (8kHz μ-law) 📝 PLANNED
 ### Audio Format Specifications
 
 **Frontend Audio Capture** (Development):
+
 - **Capture Format**: PCM, 48kHz (browser default), 16-bit, mono
 - **WebSocket Transmission**: Binary MessagePack frames with audio chunks
 - **Chunk Size**: 100ms chunks (~9.6KB at 48kHz)
 
 **Twilio Audio** (Production):
+
 - **Format**: μ-law, 8kHz, 8-bit, mono
 - **Transmission**: Twilio Media Streams (WebSocket)
 - **Chunk Size**: 20ms chunks (standard telephony)
 
 **Backend Audio Resampling** (✅ Implemented):
+
 - **Input**: PCM, 48kHz or 8kHz, 16-bit, mono
 - **Process**: Linear interpolation resampling (wave-resampler library)
 - **Output**: PCM, 16kHz, 16-bit, mono
@@ -452,6 +472,7 @@ Telephony Gateway → Twilio (8kHz μ-law) 📝 PLANNED
 - **Status**: Production-ready, fully tested, bidirectional support
 
 **STT Processing (Deepgram)** (✅ Implemented):
+
 - **Input Format**: PCM, 16kHz, 16-bit, mono (optimal for Deepgram)
 - **Buffer Strategy**: Stream chunks immediately (no batching)
 - **Transcription Latency**: 50-200ms (measured)
@@ -459,6 +480,7 @@ Telephony Gateway → Twilio (8kHz μ-law) 📝 PLANNED
 - **Reconnection**: Transparent mid-stream reconnection (user-invisible)
 
 **TTS Output (Cartesia)** (✅ Implemented - MVP):
+
 - **Output Format**: PCM, 16kHz (Cartesia native)
 - **Chunk Size**: 100-200ms chunks for low latency
 - **Resampling**: 16kHz → 48kHz (browser) or 8kHz (Twilio) via AudioResamplerService
@@ -493,21 +515,24 @@ See [External Services Integration](../integrations/external-services.md) for se
 
 ## Quality Assurance
 
-**Test Coverage**: 85%+ (Layer 1 components)
+**Test Coverage**: 96.5%+ overall (949+ tests, 33 test files)
 
 **Test Infrastructure**:
+
 - Framework: Vitest 4.0.16
-- 20+ test files (unit, integration, E2E)
-- Comprehensive mocking for external APIs (Deepgram, Cartesia)
+- 33+ test files (unit, integration, E2E, memory-leak regression)
+- Comprehensive mocking for all external APIs (Deepgram, OpenAI, Cartesia)
 - Real-time flow testing with WebSocket clients
 
 **Test Categories**:
+
 - **Unit Tests**: Services, handlers, utilities
 - **Integration Tests**: Complete audio → STT → TTS flow
 - **Error Scenario Tests**: Connection failures, reconnection, resource cleanup
 - **Concurrent Session Tests**: Multi-session handling
 
 **Quality Metrics**:
+
 - Grade A (95.25%) code quality
 - Handler + Service pattern compliance
 - Comprehensive error handling
@@ -528,20 +553,24 @@ See [Scalability Architecture](./scalability.md) for detailed scaling strategy.
 
 ## Future Enhancements
 
-### Layer 2 Enhancements (In Progress)
-- **Automatic TTS trigger** (VAD-based silence detection) 📝 PLANNED
-- **LLM conversation** (OpenAI GPT-4) 📝 PLANNED
-- **Conversation orchestration** (STT → LLM → TTS) 📝 PLANNED
-- **Interruption handling** (cancel TTS on user speech) 📝 PLANNED
-- **Debouncing for partial transcripts** 📝 PLANNED
+### Layer 2 Enhancements (Complete ✅)
+
+- **LLM conversation** (OpenAI GPT-4.1) ✅ COMPLETE
+- **Semantic streaming** (`||BREAK||` chunking for low-latency TTS) ✅ COMPLETE
+- **Full pipeline** (STT → LLM → TTS, triggered on audio.end) ✅ COMPLETE
+- **Interruption handling** (cancel TTS on user speech) 📝 PLANNED (future)
+- **Automatic VAD trigger** (no manual "Stop" button) 📝 PLANNED (future)
+- **Debouncing for partial transcripts** 📝 PLANNED (future)
 
 ### Layer 3 (Planned)
+
 - Telephony integration (Twilio)
 - Authentication & authorization
 - Database integration
 - Redis for distributed sessions
 
 ### Layer 4 (Future)
+
 - Conversation recording and storage
 - Sentiment analysis
 - Multi-language support
@@ -551,6 +580,7 @@ See [Scalability Architecture](./scalability.md) for detailed scaling strategy.
 ## Related Documents
 
 ### Core Architecture
+
 - **[MVP Audio Pipeline Documentation](./mvp-audio-pipeline.md)** - Current MVP flow and future roadmap
 - [Data Models](./data-models.md) - Complete data model specifications
 - [State Machine](./state-machine.md) - Conversation state machine
@@ -558,22 +588,26 @@ See [Scalability Architecture](./scalability.md) for detailed scaling strategy.
 - [Scalability](./scalability.md) - Scaling strategy and bottlenecks
 
 ### Protocol & API
+
 - [WebSocket Protocol Specification](../protocol/websocket-protocol.md) - Complete protocol specification (single source of truth)
 - [Event System Architecture](../protocol/event-system.md) - Unified EVENTS object reference
 - [WebSocket Quick Reference](../protocol/websocket-quick-reference.md) - Quick lookup guide
 - [API Documentation](../api/api.md) - REST + WebSocket API overview
 
 ### Audio Processing
+
 - [Audio Resampling Architecture](../audio/audio-resampling.md) - Audio resampling design and implementation
 - [Sample Rate Handling Guide](../audio/sample-rate-handling.md) - Multi-source sample rate handling
 
 ### External Integrations
+
 - [External Services](../integrations/external-services.md) - Deepgram, OpenAI, Cartesia, Twilio
 - [Deepgram STT Integration Design](../design/deepgram-stt-integration-design.md) - STT module architecture
 - [TTS Service Documentation](../services/tts-service.md) - Complete TTS service API
 - [STT Provider Comparison](../reference/stt-provider-comparison.md) - Provider analysis
 
 ### Code Organization
+
 - [Folder Structure Documentation](../code/folder-structure.md) - Detailed folder structure
 - [Implementation Plan](../development/implementation-plan.md) - Development roadmap
 

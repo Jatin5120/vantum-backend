@@ -14,7 +14,7 @@ export const TTS_CONSTANTS = {
   EXPECTED_CHUNK_BYTES: 3200, // 1600 samples * 2 bytes
 
   // Buffer limits
-  MAX_TEXT_LENGTH: 10000, // 10KB text limit per synthesis
+  MAX_TEXT_LENGTH: 5000, // Maximum text length for TTS synthesis (Cartesia API limit)
   MAX_BUFFER_SIZE: 1048576, // 1MB reconnection buffer
 
   // Logging

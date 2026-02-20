@@ -10,8 +10,9 @@
  * 5. Error handling and resilience (5 tests)
  * 6. Metrics and monitoring (4 tests - UPDATED)
  * 7. Integration and real-world scenarios (4 tests)
+ * 8. SSML Tag Support (1 test - NEW)
  *
- * Total: 31 tests targeting 85%+ coverage
+ * Total: 32 tests targeting 85%+ coverage
  */
 
 import { describe, it, expect, beforeEach, vi } from 'vitest';
@@ -47,8 +48,18 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'Hello');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(2, sessionId, 'World');
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        1,
+        sessionId,
+        'Hello',
+        expect.any(Object)
+      );
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        2,
+        sessionId,
+        'World',
+        expect.any(Object)
+      );
     });
 
     it('should extract chunks with multiple ||BREAK|| markers', async () => {
@@ -57,9 +68,24 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(3);
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'First');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(2, sessionId, 'Second');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(3, sessionId, 'Third');
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        1,
+        sessionId,
+        'First',
+        expect.any(Object)
+      );
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        2,
+        sessionId,
+        'Second',
+        expect.any(Object)
+      );
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        3,
+        sessionId,
+        'Third',
+        expect.any(Object)
+      );
     });
 
     it('should trim whitespace around extracted chunks', async () => {
@@ -67,8 +93,18 @@ describe('LLMStreamingService', () => {
 
       await llmStreamingService.processStream(sessionId, stream);
 
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'Hello');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(2, sessionId, 'World');
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        1,
+        sessionId,
+        'Hello',
+        expect.any(Object)
+      );
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        2,
+        sessionId,
+        'World',
+        expect.any(Object)
+      );
     });
 
     it('should filter out empty chunks', async () => {
@@ -77,8 +113,18 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'Hello');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(2, sessionId, 'World');
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        1,
+        sessionId,
+        'Hello',
+        expect.any(Object)
+      );
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        2,
+        sessionId,
+        'World',
+        expect.any(Object)
+      );
     });
 
     it('should handle marker at start of response', async () => {
@@ -87,7 +133,11 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(1);
-      expect(ttsController.synthesize).toHaveBeenCalledWith(sessionId, 'Hello World');
+      expect(ttsController.synthesize).toHaveBeenCalledWith(
+        sessionId,
+        'Hello World',
+        expect.any(Object)
+      );
     });
 
     it('should handle marker at end of response', async () => {
@@ -96,7 +146,11 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(1);
-      expect(ttsController.synthesize).toHaveBeenCalledWith(sessionId, 'Hello World');
+      expect(ttsController.synthesize).toHaveBeenCalledWith(
+        sessionId,
+        'Hello World',
+        expect.any(Object)
+      );
     });
 
     it('should handle consecutive markers', async () => {
@@ -105,8 +159,18 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'A');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(2, sessionId, 'B');
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        1,
+        sessionId,
+        'A',
+        expect.any(Object)
+      );
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        2,
+        sessionId,
+        'B',
+        expect.any(Object)
+      );
     });
 
     it('should handle real conversation example with markers', async () => {
@@ -120,7 +184,8 @@ describe('LLMStreamingService', () => {
       expect(ttsController.synthesize).toHaveBeenNthCalledWith(
         1,
         sessionId,
-        'Hi, this is Alex from Vantum.'
+        'Hi, this is Alex from Vantum.',
+        expect.any(Object)
       );
     });
 
@@ -133,12 +198,14 @@ describe('LLMStreamingService', () => {
       expect(ttsController.synthesize).toHaveBeenNthCalledWith(
         1,
         sessionId,
-        'What are "your rates"?'
+        'What are "your rates"?',
+        expect.any(Object)
       );
       expect(ttsController.synthesize).toHaveBeenNthCalledWith(
         2,
         sessionId,
-        'We charge $99/month.'
+        'We charge $99/month.',
+        expect.any(Object)
       );
     });
   });
@@ -163,10 +230,10 @@ describe('LLMStreamingService', () => {
 
       // Should split by sentences (may be grouped based on chunk limits)
       expect(ttsController.synthesize).toHaveBeenCalled();
-      expect(ttsController.synthesize).toHaveBeenCalledWith(
-        sessionId,
-        expect.stringContaining('first sentence')
-      );
+
+      // Get the second argument (text) from the first call
+      const firstCallText = (ttsController.synthesize as any).mock.calls[0][1];
+      expect(firstCallText).toContain('first sentence');
 
       // Verify metrics tracked fallback
       const metrics = llmStreamingService.getMetrics();
@@ -181,11 +248,17 @@ describe('LLMStreamingService', () => {
 
       // Should use marker-based chunking (2 chunks)
       expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'Hello world.');
+      expect(ttsController.synthesize).toHaveBeenNthCalledWith(
+        1,
+        sessionId,
+        'Hello world.',
+        expect.any(Object)
+      );
       expect(ttsController.synthesize).toHaveBeenNthCalledWith(
         2,
         sessionId,
-        'How are you? I am fine.'
+        'How are you? I am fine.',
+        expect.any(Object)
       );
 
       // Verify NO fallback was used
@@ -218,7 +291,10 @@ describe('LLMStreamingService', () => {
 
       // Should send "Chunk 1" from marker, then "Chunk 2" at end
       expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
-      expect(ttsController.synthesize).toHaveBeenLastCalledWith(sessionId, 'Chunk 2');
+
+      // Get the second argument (text) from the last call
+      const lastCallText = (ttsController.synthesize as any).mock.calls[1][1];
+      expect(lastCallText).toBe('Chunk 2');
     });
 
     it('should not send empty chunks', async () => {
@@ -237,7 +313,10 @@ describe('LLMStreamingService', () => {
 
       // Should not force chunk at exactly the limit
       expect(ttsController.synthesize).toHaveBeenCalledTimes(1);
-      expect(ttsController.synthesize).toHaveBeenCalledWith(sessionId, exactSize);
+
+      // Get the second argument (text) from the first call
+      const firstCallText = (ttsController.synthesize as any).mock.calls[0][1];
+      expect(firstCallText).toBe(exactSize);
     });
   });
 
@@ -424,8 +503,11 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(1, sessionId, 'Hello there');
-      expect(ttsController.synthesize).toHaveBeenNthCalledWith(2, sessionId, 'How are you?');
+
+      // Get the second argument (text) from calls
+      const calls = (ttsController.synthesize as any).mock.calls;
+      expect(calls[0][1]).toBe('Hello there');
+      expect(calls[1][1]).toBe('How are you?');
     });
 
     it('should handle mixed case markers (case-sensitive)', async () => {
@@ -436,7 +518,10 @@ describe('LLMStreamingService', () => {
 
       // Should not split on lowercase 'break'
       expect(ttsController.synthesize).toHaveBeenCalledTimes(1);
-      expect(ttsController.synthesize).toHaveBeenCalledWith(sessionId, 'Hello ||break|| World');
+
+      // Get the second argument (text) from the first call
+      const firstCallText = (ttsController.synthesize as any).mock.calls[0][1];
+      expect(firstCallText).toBe('Hello ||break|| World');
     });
 
     it('should handle very long conversation with many chunks', async () => {
@@ -450,6 +535,30 @@ describe('LLMStreamingService', () => {
       await llmStreamingService.processStream(sessionId, stream);
 
       expect(ttsController.synthesize).toHaveBeenCalledTimes(10);
+    });
+  });
+
+  // ============================================================================
+  // SUITE 8: SSML Tag Support (NEW)
+  // ============================================================================
+
+  describe('SSML Tag Support', () => {
+    it('should preserve SSML tags through semantic streaming pipeline', async () => {
+      // LLM response with SSML
+      const llmResponse =
+        "<emotion value='excited'/>Hello!</emotion>||BREAK||<emotion value='curious'/>How are you?</emotion>";
+
+      const stream = createMockStream([llmResponse]);
+
+      // Process through semantic streaming
+      await llmStreamingService.processStream(sessionId, stream);
+
+      // Verify TTS received SSML intact - check the second argument (text) of each call
+      expect(ttsController.synthesize).toHaveBeenCalledTimes(2);
+
+      const calls = (ttsController.synthesize as any).mock.calls;
+      expect(calls[0][1]).toBe("<emotion value='excited'/>Hello!</emotion>");
+      expect(calls[1][1]).toBe("<emotion value='curious'/>How are you?</emotion>");
     });
   });
 });
